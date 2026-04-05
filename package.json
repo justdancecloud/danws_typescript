@@ -39,9 +39,13 @@
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^25.5.2",
+    "@types/ws": "^8.18.1",
     "tsup": "^8.5.1",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2",
     "vitest": "^4.1.2"
+  },
+  "dependencies": {
+    "ws": "^8.20.0"
   }
 }

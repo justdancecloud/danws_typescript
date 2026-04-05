@@ -121,10 +121,10 @@ parser.feed(someBytes);
 ## Development Status
 
 - [x] Phase 1: Protocol Core (encode/decode, DLE escaping, stream parser, all 13 data types)
-- [ ] Phase 2: State Machine (handshake, key registry, auth, recovery)
-- [ ] Phase 3: Connection Manager (WebSocket, bulk queue, heartbeat, reconnection)
-- [ ] Phase 4: Public API (Client, Server, Session, TX/RX Channel)
-- [ ] Phase 5: Integration Testing
+- [x] Phase 2: State Machine (handshake, key registry, auth, recovery)
+- [x] Phase 3: Connection Manager (WebSocket, bulk queue, heartbeat, reconnection)
+- [x] Phase 4: Public API (Client, Server, Session, TX/RX Channel) + E2E Tests
+- [ ] Phase 5: Additional Integration Testing
 - [ ] Phase 6: npm Publish
 
 ## License

@@ -54,6 +54,19 @@ export class KeyRegistry {
     }
   }
 
+  /**
+   * Register a single key with a specific keyId (used for receiving remote registrations).
+   */
+  registerOne(keyId: number, path: string, type: DataType): void {
+    validateKeyPath(path);
+    const entry: KeyEntry = { path, type, keyId };
+    this.byId.set(keyId, entry);
+    this.byPath.set(path, entry);
+    if (keyId >= this.nextId) {
+      this.nextId = keyId + 1;
+    }
+  }
+
   getByKeyId(keyId: number): KeyEntry | undefined {
     return this.byId.get(keyId);
   }

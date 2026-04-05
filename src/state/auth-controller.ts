@@ -115,7 +115,7 @@ export class AuthController {
     return {
       frameType: FrameType.Identify,
       keyId: 0,
-      dataType: DataType.Null,
+      dataType: DataType.Binary,
       payload: uuidToBytes(uuid),
     };
   }
