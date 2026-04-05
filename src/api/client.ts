@@ -285,7 +285,7 @@ export class DanWebSocketClient {
 
   private _sendRaw(data: Uint8Array): void {
     if (this._ws && this._ws.readyState === 1) {
-      this._ws.send(data);
+      this._ws.send(data as any);
     }
   }
 
