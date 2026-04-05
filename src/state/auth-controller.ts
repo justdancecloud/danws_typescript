@@ -11,7 +11,7 @@ export interface AuthConfig {
 export class AuthController {
   private _phase: AuthPhase = "awaiting_identify";
   private _clientUuid: string | null = null;
-  private _username: string | null = null;
+  private _principal: string | null = null;
   private _token: string | null = null;
   private _timeoutTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -25,8 +25,8 @@ export class AuthController {
     return this._clientUuid;
   }
 
-  get username(): string | null {
-    return this._username;
+  get principal(): string | null {
+    return this._principal;
   }
 
   get token(): string | null {
@@ -78,8 +78,8 @@ export class AuthController {
   /**
    * Accept authorization. Sets username and returns AUTH_OK frame.
    */
-  accept(username: string): Frame {
-    this._username = username;
+  accept(principal: string): Frame {
+    this._principal = principal;
     this._phase = "authorized";
     this.clearTimeout();
 
@@ -154,7 +154,7 @@ export class AuthController {
   reset(): void {
     this._phase = "awaiting_identify";
     this._clientUuid = null;
-    this._username = null;
+    this._principal = null;
     this._token = null;
     this.clearTimeout();
   }

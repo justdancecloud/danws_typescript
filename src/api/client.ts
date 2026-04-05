@@ -1,16 +1,15 @@
+import { WebSocket as NodeWebSocket } from "ws";
 import { DataType, FrameType, DanWSError } from "../protocol/types.js";
 import type { Frame } from "../protocol/types.js";
-import { encode, encodeHeartbeat } from "../protocol/codec.js";
+import { encode } from "../protocol/codec.js";
 import { createStreamParser } from "../protocol/stream-parser.js";
-import { HandshakeController } from "../state/handshake-controller.js";
 import { AuthController } from "../state/auth-controller.js";
+import { KeyRegistry } from "../state/key-registry.js";
+import { StateStore } from "../state/state-store.js";
 import { RecoveryController } from "../state/recovery-controller.js";
 import { BulkQueue } from "../connection/bulk-queue.js";
 import { HeartbeatManager } from "../connection/heartbeat-manager.js";
-import { ReconnectEngine, OfflineQueue, type ReconnectOptions, DEFAULT_RECONNECT_OPTIONS } from "../connection/reconnect-engine.js";
-import { TXChannel, RXChannel } from "./channels.js";
-
-import { WebSocket as NodeWebSocket } from "ws";
+import { ReconnectEngine, type ReconnectOptions, DEFAULT_RECONNECT_OPTIONS } from "../connection/reconnect-engine.js";
 
 export type ClientState =
   | "disconnected"
@@ -19,19 +18,15 @@ export type ClientState =
   | "authorizing"
   | "synchronizing"
   | "ready"
-  | "recovering"
   | "reconnecting";
 
 export interface ClientOptions {
   reconnect?: Partial<ReconnectOptions>;
 }
 
-// Generate UUIDv7
 function generateUUIDv7(): string {
   const now = Date.now();
   const bytes = new Uint8Array(16);
-
-  // Timestamp (48 bits)
   const ms = BigInt(now);
   bytes[0] = Number((ms >> 40n) & 0xffn);
   bytes[1] = Number((ms >> 32n) & 0xffn);
@@ -39,16 +34,10 @@ function generateUUIDv7(): string {
   bytes[3] = Number((ms >> 16n) & 0xffn);
   bytes[4] = Number((ms >> 8n) & 0xffn);
   bytes[5] = Number(ms & 0xffn);
-
-  // Random bits
   const random = crypto.getRandomValues(new Uint8Array(10));
   bytes.set(random, 6);
-
-  // Version 7
   bytes[6] = (bytes[6] & 0x0f) | 0x70;
-  // Variant 10xx
   bytes[8] = (bytes[8] & 0x3f) | 0x80;
-
   const hex = Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
   return [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20, 32)].join("-");
 }
@@ -61,31 +50,21 @@ export class DanWebSocketClient {
   private _ws: WebSocket | null = null;
   private _intentionalDisconnect = false;
 
-  // Layers
-  private _txHandshake = new HandshakeController("client-to-server");
-  private _rxHandshake = new HandshakeController("server-to-client");
+  // Server→Client key registry and state
+  private _registry = new KeyRegistry();
+  private _store = new StateStore();
   private _inboundRecovery = new RecoveryController();
-  private _outboundRecovery = new RecoveryController();
+
+  // Connection layers
   private _bulkQueue = new BulkQueue();
   private _heartbeat = new HeartbeatManager();
   private _reconnectEngine: ReconnectEngine;
-  private _offlineQueue: OfflineQueue;
-
-  // Channels
-  readonly tx: TXChannel;
-  readonly rx: RXChannel;
-
-  // Sync tracking
-  private _serverSyncReceived = false;
-  private _clientSyncSent = false;
-  private _serverReadySent = false;
-  private _clientReadyReceived = false;
 
   // Callbacks
   private _onConnect: Array<() => void> = [];
   private _onDisconnect: Array<() => void> = [];
   private _onReady: Array<() => void> = [];
-  private _onRecovery: Array<(direction: "inbound" | "outbound") => void> = [];
+  private _onReceive: Array<(key: string, value: unknown) => void> = [];
   private _onReconnecting: Array<(attempt: number, delay: number) => void> = [];
   private _onReconnect: Array<() => void> = [];
   private _onReconnectFailed: Array<() => void> = [];
@@ -94,24 +73,27 @@ export class DanWebSocketClient {
   constructor(url: string, options?: ClientOptions) {
     this._url = url;
     this.id = generateUUIDv7();
-
     const reconnectOpts = { ...DEFAULT_RECONNECT_OPTIONS, ...options?.reconnect };
     this._reconnectEngine = new ReconnectEngine(reconnectOpts);
-    this._offlineQueue = new OfflineQueue(reconnectOpts.offlineQueueSize);
-
-    this.tx = new TXChannel(this._txHandshake);
-    this.rx = new RXChannel();
-
     this._setupInternals();
   }
 
-  get state(): ClientState {
-    return this._state;
+  get state(): ClientState { return this._state; }
+
+  /** Get the current value for a server-registered key. */
+  get(key: string): unknown {
+    const entry = this._registry.getByPath(key);
+    if (!entry) return undefined;
+    return this._store.get(entry.keyId);
+  }
+
+  /** List all server-registered key paths. */
+  get keys(): string[] {
+    return this._registry.paths;
   }
 
   connect(): void {
     if (this._state !== "disconnected" && this._state !== "reconnecting") return;
-
     this._intentionalDisconnect = false;
     this._state = "connecting";
 
@@ -137,8 +119,7 @@ export class DanWebSocketClient {
   }
 
   authorize(token: string): void {
-    if (!this._ws || this._ws.readyState !== WebSocket.OPEN) return;
-
+    if (!this._ws || this._ws.readyState !== 1) return;
     const frame = AuthController.buildAuthFrame(token);
     this._sendFrame(frame);
     this._state = "authorizing";
@@ -149,7 +130,7 @@ export class DanWebSocketClient {
   onConnect(cb: () => void): void { this._onConnect.push(cb); }
   onDisconnect(cb: () => void): void { this._onDisconnect.push(cb); }
   onReady(cb: () => void): void { this._onReady.push(cb); }
-  onRecovery(cb: (direction: "inbound" | "outbound") => void): void { this._onRecovery.push(cb); }
+  onReceive(cb: (key: string, value: unknown) => void): void { this._onReceive.push(cb); }
   onReconnecting(cb: (attempt: number, delay: number) => void): void { this._onReconnecting.push(cb); }
   onReconnect(cb: () => void): void { this._onReconnect.push(cb); }
   onReconnectFailed(cb: () => void): void { this._onReconnectFailed.push(cb); }
@@ -158,40 +139,17 @@ export class DanWebSocketClient {
   // ──── Internals ────
 
   private _setupInternals(): void {
-    // TX channel enqueue → bulk queue
-    this.tx._setEnqueue((frame) => {
-      if (this._state === "ready" || this._state === "synchronizing") {
-        this._bulkQueue.enqueue(frame);
-      } else if (this._state === "reconnecting" || this._state === "disconnected") {
-        // Store in offline queue
-        const entry = this._txHandshake.registry.getByKeyId(frame.keyId);
-        if (entry) {
-          this._offlineQueue.set(entry.path, frame.payload);
-        }
-      }
-    });
+    this._bulkQueue.onFlush((data) => this._sendRaw(data));
 
-    // Bulk queue flush → WebSocket send
-    this._bulkQueue.onFlush((data) => {
-      this._sendRaw(data);
-    });
-
-    // Heartbeat → WebSocket send
-    this._heartbeat.onSend((data) => {
-      this._sendRaw(data);
-    });
-
-    // Heartbeat timeout → disconnect
+    this._heartbeat.onSend((data) => this._sendRaw(data));
     this._heartbeat.onTimeout(() => {
       this._emitError(new DanWSError("HEARTBEAT_TIMEOUT", "No heartbeat received within 15 seconds"));
       this._handleClose();
     });
 
-    // Reconnect engine
     this._reconnectEngine.onReconnect((attempt, delay) => {
       this._emit(this._onReconnecting, attempt, delay);
     });
-
     this._reconnectEngine.onExhausted(() => {
       this._state = "disconnected";
       this._emitError(new DanWSError("RECONNECT_EXHAUSTED", "All reconnection attempts exhausted"));
@@ -201,18 +159,12 @@ export class DanWebSocketClient {
 
   private _handleOpen(): void {
     this._state = "identifying";
-
-    // Start heartbeat
     this._heartbeat.start();
 
-    // Send IDENTIFY
     const identifyFrame = AuthController.buildIdentifyFrame(this.id);
     this._sendFrame(identifyFrame);
 
     this._emit(this._onConnect);
-
-    // If no auth needed, start synchronization immediately
-    // (Server will send key registrations or AUTH_OK)
   }
 
   private _handleClose(): void {
@@ -230,181 +182,105 @@ export class DanWebSocketClient {
 
     if (this._intentionalDisconnect) return;
 
-    const wasReady = this._state === "ready";
     this._state = "reconnecting";
-    this._resetSyncState();
-
     this._emit(this._onDisconnect);
-
-    // Start reconnection
     this._reconnectEngine.start();
   }
 
   private _handleMessage(data: ArrayBuffer | Buffer | string): void {
     if (typeof data === "string") return;
-
     const bytes = data instanceof ArrayBuffer
       ? new Uint8Array(data)
       : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-    const parser = createStreamParser();
 
+    const parser = createStreamParser();
     parser.onFrame((frame) => this._handleFrame(frame));
     parser.onHeartbeat(() => this._heartbeat.received());
     parser.onError((err) => {
-      if (err instanceof DanWSError) {
-        this._emitError(err);
-      }
+      if (err instanceof DanWSError) this._emitError(err);
     });
-
     parser.feed(bytes);
   }
 
   private _handleFrame(frame: Frame): void {
     switch (frame.frameType) {
-      // Auth responses
       case FrameType.AuthOk:
         this._state = "synchronizing";
-        this._startSync();
         break;
 
       case FrameType.AuthFail:
-        this._intentionalDisconnect = true; // Don't reconnect
+        this._intentionalDisconnect = true;
         this._emitError(new DanWSError("AUTH_REJECTED", String(frame.payload)));
         this._cleanup();
         this._state = "disconnected";
         this._emit(this._onDisconnect);
         break;
 
-      // Server key registration
       case FrameType.ServerKeyRegistration: {
-        // If still identifying (no auth), transition to synchronizing
         if (this._state === "identifying") {
           this._state = "synchronizing";
-          this._startSync();
         }
         const keyPath = frame.payload as string;
-        this.rx._registerKey(frame.keyId, frame.dataType, keyPath);
+        this._registry.registerOne(frame.keyId, keyPath, frame.dataType);
         break;
       }
 
-      // Server SYNC
-      case FrameType.ServerSync:
+      case FrameType.ServerSync: {
         if (this._state === "identifying") {
           this._state = "synchronizing";
-          this._startSync();
         }
-        this._serverSyncReceived = true;
         // Send Client READY
-        const readyFrame = this._rxHandshake.handleSync();
+        const readyFrame: Frame = {
+          frameType: FrameType.ClientReady,
+          keyId: 0, dataType: DataType.Null, payload: null,
+        };
         this._bulkQueue.enqueue(readyFrame);
-        this._checkReady();
         break;
+      }
 
-      // Server READY (response to our Client SYNC)
-      case FrameType.ServerReady:
-        this._clientReadyReceived = true;
-        // Send all current TX values
-        const valueFrames = this._txHandshake.handleReady();
-        for (const vf of valueFrames) {
-          this._bulkQueue.enqueue(vf);
-        }
-        // Flush offline queue
-        this._flushOfflineQueue();
-        this._checkReady();
-        break;
-
-      // Server value
-      case FrameType.ServerValue:
-        if (!this.rx._hasKeyId(frame.keyId)) {
-          // Unknown key — trigger recovery
+      case FrameType.ServerValue: {
+        if (!this._registry.hasKeyId(frame.keyId)) {
           const resyncFrame = this._inboundRecovery.triggerResync(FrameType.ClientResyncReq);
-          if (resyncFrame) {
-            this._bulkQueue.enqueue(resyncFrame);
-          }
+          if (resyncFrame) this._bulkQueue.enqueue(resyncFrame);
           this._emitError(new DanWSError("UNKNOWN_KEY_ID", `Unknown server key ID: ${frame.keyId}`));
           break;
         }
-        this.rx._receiveValue(frame.keyId, frame.payload);
-        break;
+        this._store.set(frame.keyId, frame.payload);
 
-      // Server RESET
-      case FrameType.ServerReset:
-        this.rx._reset();
-        this._serverSyncReceived = false;
-        break;
+        const entry = this._registry.getByKeyId(frame.keyId);
+        if (entry) {
+          for (const cb of this._onReceive) {
+            try { cb(entry.path, frame.payload); } catch {}
+          }
+        }
 
-      // Server RESYNC_REQ (server wants us to re-register client keys)
-      case FrameType.ServerResyncReq: {
-        const resyncFrames = this._txHandshake.handleResyncReq();
-        if (resyncFrames) {
-          for (const f of resyncFrames) this._bulkQueue.enqueue(f);
-          this._clientReadyReceived = false;
+        // Check if this is the initial sync completing
+        if (this._state === "synchronizing") {
+          this._state = "ready";
+          this._inboundRecovery.complete();
+          this._emit(this._onReady);
+          if (this._reconnectEngine.isActive) {
+            this._reconnectEngine.stop();
+            this._emit(this._onReconnect);
+          }
         }
         break;
       }
 
-      // Error
+      case FrameType.ServerReset:
+        this._registry.clear();
+        this._store.clear();
+        this._state = "synchronizing";
+        break;
+
       case FrameType.Error:
         this._emitError(new DanWSError("REMOTE_ERROR", String(frame.payload)));
         break;
     }
   }
 
-  private _startSync(): void {
-    this._state = "synchronizing";
-    this._resetSyncState();
-
-    // Send client key registration + SYNC
-    const frames = this.tx._buildInitialRegistration();
-    if (frames.length > 0) {
-      this._clientSyncSent = true;
-      for (const f of frames) this._bulkQueue.enqueue(f);
-    } else {
-      this._clientSyncSent = true;
-      this._clientReadyReceived = true; // No client keys → no Server READY needed
-    }
-  }
-
-  private _checkReady(): void {
-    if (this._serverSyncReceived && this._clientReadyReceived) {
-      const wasReconnecting = this._state === "reconnecting" || this._state === "synchronizing";
-      this._state = "ready";
-
-      this._inboundRecovery.complete();
-      this._outboundRecovery.complete();
-
-      this._emit(this._onReady);
-
-      if (this._reconnectEngine.isActive) {
-        this._reconnectEngine.stop();
-        this._emit(this._onReconnect);
-      }
-    }
-  }
-
-  private _flushOfflineQueue(): void {
-    const queued = this._offlineQueue.drain();
-    for (const [key, value] of queued) {
-      try {
-        this.tx.set(key, value);
-      } catch {}
-    }
-  }
-
-  private _resetSyncState(): void {
-    this._serverSyncReceived = false;
-    this._clientSyncSent = false;
-    this._serverReadySent = false;
-    this._clientReadyReceived = false;
-    this._txHandshake.reset();
-    this._rxHandshake.reset();
-    this._inboundRecovery.reset();
-    this._outboundRecovery.reset();
-  }
-
   private _sendFrame(frame: Frame): void {
-    const bytes = encode(frame);
-    this._sendRaw(bytes);
+    this._sendRaw(encode(frame));
   }
 
   private _sendRaw(data: Uint8Array): void {

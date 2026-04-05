@@ -50,7 +50,7 @@ describe("AuthController", () => {
       expect(frame.frameType).toBe(FrameType.AuthOk);
       expect(auth.phase).toBe("authorized");
       expect(auth.isAuthorized).toBe(true);
-      expect(auth.username).toBe("alice");
+      expect(auth.principal).toBe("alice");
     });
 
     it("reject transitions to rejected", () => {
@@ -164,7 +164,7 @@ describe("AuthController", () => {
       auth.reset();
       expect(auth.phase).toBe("awaiting_identify");
       expect(auth.clientUuid).toBeNull();
-      expect(auth.username).toBeNull();
+      expect(auth.principal).toBeNull();
       expect(auth.isAuthorized).toBe(false);
     });
   });

@@ -23,127 +23,107 @@ let server: DanWebSocketServer | null = null;
 let clients: DanWebSocketClient[] = [];
 
 afterEach(() => {
-  for (const c of clients) {
-    try { c.disconnect(); } catch {}
-  }
+  for (const c of clients) { try { c.disconnect(); } catch {} }
   clients = [];
-  if (server) {
-    try { server.close(); } catch {}
-    server = null;
-  }
+  if (server) { try { server.close(); } catch {} server = null; }
 });
 
-function createServer(port: number, mode: "broadcast" | "individual" = "individual") {
-  server = new DanWebSocketServer({ port, path: "/ws", mode });
+function createServer(port: number) {
+  server = new DanWebSocketServer({ port, path: "/ws" });
   return server;
 }
 
-function createClient(port: number, opts?: Parameters<typeof DanWebSocketClient.prototype.constructor>[1]) {
+function createClient(port: number, opts?: any) {
   const c = new DanWebSocketClient(`ws://127.0.0.1:${port}/ws`, opts);
   clients.push(c);
   return c;
 }
 
-describe("E2E: Individual Mode", () => {
-  it("basic connect, handshake, and value exchange", async () => {
+describe("E2E: Principal-based Server→Client", () => {
+  it("basic connect, handshake, and value sync", async () => {
     const srv = createServer(19001);
     await waitFor(50);
 
-    const receivedByServer: Array<{ key: string; value: unknown }> = [];
-    const receivedByClient: Array<{ key: string; value: unknown }> = [];
+    // Set up principal data before any connection
+    srv.tx.principal("default").updateKeys([
+      { path: "greeting", type: DataType.String },
+      { path: "count", type: DataType.Uint32 },
+    ]);
+    srv.tx.principal("default").set("greeting", "Hello");
+    srv.tx.principal("default").set("count", 42);
 
     srv.onConnection((session) => {
-      session.tx.updateKeys([
-        { path: "greeting", type: DataType.String },
-        { path: "count", type: DataType.Uint32 },
-      ]);
-      session.tx.set("greeting", "Hello");
-      session.tx.set("count", 42);
-
-      session.rx.onReceive((key, value) => {
-        receivedByServer.push({ key, value });
-      });
+      // No-auth: principal is "" by default
     });
 
     const client = createClient(19001);
-    client.tx.updateKeys([
-      { path: "input.x", type: DataType.Float32 },
-    ]);
+    const received: Array<{ key: string; value: unknown }> = [];
+    client.onReceive((key, value) => received.push({ key, value }));
 
-    client.rx.onReceive((key, value) => {
-      receivedByClient.push({ key, value });
-    });
-
-    let clientReady = false;
-    client.onReady(() => { clientReady = true; });
+    let ready = false;
+    client.onReady(() => { ready = true; });
 
     client.connect();
-
-    await waitUntil(() => clientReady, 3000);
+    await waitUntil(() => ready);
+    await waitFor(200);
 
     expect(client.state).toBe("ready");
-    expect(client.rx.get("greeting")).toBe("Hello");
-    expect(client.rx.get("count")).toBe(42);
-
-    // Send value from client
-    client.tx.set("input.x", 1.5);
-    await waitFor(200); // Wait for bulk flush
-
-    expect(receivedByServer.length).toBeGreaterThanOrEqual(1);
-    expect(receivedByServer.some(r => r.key === "input.x")).toBe(true);
+    expect(client.get("greeting")).toBe("Hello");
+    expect(client.get("count")).toBe(42);
+    expect(received.length).toBeGreaterThanOrEqual(2);
   });
 
-  it("server sends value update after ready", async () => {
+  it("server updates value after client ready", async () => {
     const srv = createServer(19002);
     await waitFor(50);
 
-    let sessionRef: any = null;
-    srv.onConnection((session) => {
-      sessionRef = session;
-      session.tx.updateKeys([
-        { path: "score", type: DataType.Uint32 },
-      ]);
-      session.tx.set("score", 0);
-    });
+    srv.tx.principal("default").updateKeys([
+      { path: "score", type: DataType.Uint32 },
+    ]);
+    srv.tx.principal("default").set("score", 0);
 
     const client = createClient(19002);
     const values: unknown[] = [];
 
     let ready = false;
     client.onReady(() => { ready = true; });
-    client.rx.onReceive((key, value) => {
+    client.onReceive((key, value) => {
       if (key === "score") values.push(value);
     });
 
     client.connect();
     await waitUntil(() => ready);
-    await waitFor(300); // Wait for initial value sync
+    await waitFor(200);
 
     expect(values).toContain(0);
 
-    // Update server-side value
-    sessionRef.tx.set("score", 100);
-    await waitFor(300);
+    srv.tx.principal("default").set("score", 100);
+    await waitFor(200);
 
     expect(values).toContain(100);
   });
 
-  it("multiple clients get independent sessions", async () => {
+  it("multiple clients share same principal data", async () => {
     const srv = createServer(19003);
     await waitFor(50);
 
-    let sessionCount = 0;
-    srv.onConnection((session) => {
-      sessionCount++;
-      session.tx.updateKeys([
-        { path: "id", type: DataType.String },
-      ]);
-      session.tx.set("id", session.id);
+    srv.tx.principal("shared").updateKeys([
+      { path: "data", type: DataType.String },
+    ]);
+    srv.tx.principal("shared").set("data", "shared-value");
+
+    // Both clients connect with auth → same principal
+    srv.enableAuthorization(true);
+    srv.onAuthorize((uuid, token) => {
+      srv.authorize(uuid, token, "shared");
     });
 
     const c1 = createClient(19003);
     const c2 = createClient(19003);
 
+    c1.onConnect(() => c1.authorize("token1"));
+    c2.onConnect(() => c2.authorize("token2"));
+
     let r1 = false, r2 = false;
     c1.onReady(() => { r1 = true; });
     c2.onReady(() => { r2 = true; });
@@ -152,40 +132,56 @@ describe("E2E: Individual Mode", () => {
     c2.connect();
 
     await waitUntil(() => r1 && r2);
+    await waitFor(200);
 
-    await waitFor(300); // Wait for value sync
-    expect(sessionCount).toBe(2);
-    expect(c1.rx.get("id")).toBe(c1.id);
-    expect(c2.rx.get("id")).toBe(c2.id);
+    expect(c1.get("data")).toBe("shared-value");
+    expect(c2.get("data")).toBe("shared-value");
+
+    // Update via principal — both clients should get it
+    srv.tx.principal("shared").set("data", "updated");
+    await waitFor(200);
+
+    expect(c1.get("data")).toBe("updated");
+    expect(c2.get("data")).toBe("updated");
   });
-});
 
-describe("E2E: Broadcast Mode", () => {
-  it("all clients receive same broadcast data", async () => {
-    const srv = createServer(19004, "broadcast");
+  it("different principals get different data", async () => {
+    const srv = createServer(19004);
     await waitFor(50);
 
-    srv.tx.updateKeys([
-      { path: "sensor.temp", type: DataType.Float32 },
+    srv.tx.principal("alice").updateKeys([
+      { path: "name", type: DataType.String },
     ]);
-    srv.tx.set("sensor.temp", 23.5);
+    srv.tx.principal("alice").set("name", "Alice");
 
-    const c1 = createClient(19004);
-    const c2 = createClient(19004);
+    srv.tx.principal("bob").updateKeys([
+      { path: "name", type: DataType.String },
+    ]);
+    srv.tx.principal("bob").set("name", "Bob");
 
-    let r1 = false, r2 = false;
-    c1.onReady(() => { r1 = true; });
-    c2.onReady(() => { r2 = true; });
+    srv.enableAuthorization(true);
+    srv.onAuthorize((uuid, token) => {
+      srv.authorize(uuid, token, token); // token = principal name
+    });
 
-    c1.connect();
-    c2.connect();
+    const cAlice = createClient(19004);
+    const cBob = createClient(19004);
 
-    await waitUntil(() => r1 && r2);
-    await waitFor(300); // Wait for value sync
+    cAlice.onConnect(() => cAlice.authorize("alice"));
+    cBob.onConnect(() => cBob.authorize("bob"));
 
-    // Float32 precision
-    expect(c1.rx.get("sensor.temp")).toBeCloseTo(23.5, 1);
-    expect(c2.rx.get("sensor.temp")).toBeCloseTo(23.5, 1);
+    let rA = false, rB = false;
+    cAlice.onReady(() => { rA = true; });
+    cBob.onReady(() => { rB = true; });
+
+    cAlice.connect();
+    cBob.connect();
+
+    await waitUntil(() => rA && rB);
+    await waitFor(200);
+
+    expect(cAlice.get("name")).toBe("Alice");
+    expect(cBob.get("name")).toBe("Bob");
   });
 });
 
@@ -194,36 +190,31 @@ describe("E2E: Authentication", () => {
     const srv = createServer(19005);
     await waitFor(50);
 
-    srv.enableAuthorization(true, { timeout: 5000 });
-
+    srv.enableAuthorization(true);
     srv.onAuthorize((uuid, token) => {
-      if (token === "valid-token") {
+      if (token === "valid") {
         srv.authorize(uuid, token, "alice");
       } else {
         srv.reject(uuid, "bad token");
       }
     });
 
-    srv.onConnection((session) => {
-      session.tx.updateKeys([
-        { path: "user.name", type: DataType.String },
-      ]);
-      session.tx.set("user.name", session.username!);
-    });
+    srv.tx.principal("alice").updateKeys([
+      { path: "user.name", type: DataType.String },
+    ]);
+    srv.tx.principal("alice").set("user.name", "Alice");
 
     const client = createClient(19005);
-    client.onConnect(() => {
-      client.authorize("valid-token");
-    });
+    client.onConnect(() => client.authorize("valid"));
 
     let ready = false;
     client.onReady(() => { ready = true; });
 
     client.connect();
     await waitUntil(() => ready);
-    await waitFor(300); // Wait for value sync
+    await waitFor(200);
 
-    expect(client.rx.get("user.name")).toBe("alice");
+    expect(client.get("user.name")).toBe("Alice");
   });
 
   it("auth flow: reject", async () => {
@@ -238,13 +229,8 @@ describe("E2E: Authentication", () => {
     const client = createClient(19006, { reconnect: { enabled: false } });
     const errors: string[] = [];
 
-    client.onConnect(() => {
-      client.authorize("bad-token");
-    });
-
-    client.onError((err) => {
-      errors.push(err.code);
-    });
+    client.onConnect(() => client.authorize("bad"));
+    client.onError((err) => errors.push(err.code));
 
     client.connect();
     await waitFor(500);
@@ -255,18 +241,26 @@ describe("E2E: Authentication", () => {
 });
 
 describe("E2E: Session management", () => {
-  it("getSession and isConnected", async () => {
+  it("getSession, getSessionsByPrincipal, isConnected", async () => {
     const srv = createServer(19007);
     await waitFor(50);
 
-    let uuid = "";
-    srv.onConnection((session) => {
-      uuid = session.id;
-      session.tx.updateKeys([{ path: "x", type: DataType.Bool }]);
-      session.tx.set("x", true);
+    srv.enableAuthorization(true);
+    srv.onAuthorize((uuid, token) => {
+      srv.authorize(uuid, token, "alice");
     });
 
+    srv.tx.principal("alice").updateKeys([
+      { path: "x", type: DataType.Bool },
+    ]);
+    srv.tx.principal("alice").set("x", true);
+
+    let uuid = "";
+    srv.onConnection((session) => { uuid = session.id; });
+
     const client = createClient(19007);
+    client.onConnect(() => client.authorize("token"));
+
     let ready = false;
     client.onReady(() => { ready = true; });
     client.connect();
@@ -275,13 +269,14 @@ describe("E2E: Session management", () => {
 
     expect(srv.isConnected(uuid)).toBe(true);
     expect(srv.getSession(uuid)).not.toBeNull();
-    expect(srv.getSession(uuid)!.id).toBe(uuid);
+    expect(srv.getSession(uuid)!.principal).toBe("alice");
+    expect(srv.getSessionsByPrincipal("alice")).toHaveLength(1);
 
     client.disconnect();
     await waitFor(200);
 
     expect(srv.isConnected(uuid)).toBe(false);
-    // Session still exists within TTL
-    expect(srv.getSession(uuid)).not.toBeNull();
+    expect(srv.getSession(uuid)).not.toBeNull(); // Still within TTL
+    expect(srv.getSessionsByPrincipal("alice")).toHaveLength(1);
   });
 });
