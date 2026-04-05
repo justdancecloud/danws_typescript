@@ -1,8 +1,15 @@
 import { DataType, FrameType, DanWSError } from "../protocol/types.js";
 import type { Frame } from "../protocol/types.js";
-import { KeyRegistry, validateKeyPath, type KeyDefinition } from "../state/key-registry.js";
-import { StateStore } from "../state/state-store.js";
 import { serialize } from "../protocol/serializer.js";
+import { detectDataType } from "../protocol/auto-type.js";
+import { validateKeyPath } from "../state/key-registry.js";
+
+interface KeyEntry {
+  keyId: number;
+  path: string;
+  type: DataType;
+  value: unknown;
+}
 
 /**
  * Shared TX state for one principal.
@@ -10,66 +17,107 @@ import { serialize } from "../protocol/serializer.js";
  */
 export class PrincipalTX {
   readonly name: string;
-  private _registry = new KeyRegistry();
-  private _store = new StateStore();
+  private _entries = new Map<string, KeyEntry>(); // path → entry
+  private _nextKeyId = 1;
+  private _needsResync = false;
   private _onValueSet: ((frame: Frame) => void) | null = null;
+  private _onKeysChanged: (() => void) | null = null;
 
   constructor(name: string) {
     this.name = name;
   }
 
-  /** @internal — callback when set() is called (for broadcasting to sessions) */
+  /** @internal */
   _onValue(fn: (frame: Frame) => void): void {
     this._onValueSet = fn;
   }
 
-  updateKeys(keys: KeyDefinition[]): void {
-    const paths = new Set<string>();
-    for (const k of keys) {
-      validateKeyPath(k.path);
-      if (paths.has(k.path)) {
-        throw new DanWSError("DUPLICATE_KEY_PATH", `Duplicate key path: "${k.path}"`);
-      }
-      paths.add(k.path);
-    }
-    this._registry.register(keys);
+  /** @internal */
+  _onResync(fn: () => void): void {
+    this._onKeysChanged = fn;
   }
 
+  /**
+   * Set a key-value pair. Auto-detects DataType from the value.
+   * If the key is new or its type changes, triggers re-sync to all sessions.
+   */
   set(key: string, value: unknown): void {
-    const entry = this._registry.getByPath(key);
-    if (!entry) {
-      throw new DanWSError("KEY_NOT_REGISTERED", `Key not registered: "${key}". Call updateKeys() first.`);
+    validateKeyPath(key);
+    const newType = detectDataType(value);
+    serialize(newType, value); // validate
+
+    const existing = this._entries.get(key);
+
+    if (!existing) {
+      // New key
+      const entry: KeyEntry = {
+        keyId: this._nextKeyId++,
+        path: key,
+        type: newType,
+        value,
+      };
+      this._entries.set(key, entry);
+      this._triggerResync();
+      return;
     }
 
-    serialize(entry.type, value); // validate
-    this._store.set(entry.keyId, value);
+    if (existing.type !== newType) {
+      // Type changed — re-register
+      existing.type = newType;
+      existing.value = value;
+      this._triggerResync();
+      return;
+    }
+
+    // Same key, same type — just update value and broadcast
+    existing.value = value;
 
     if (this._onValueSet) {
       this._onValueSet({
         frameType: FrameType.ServerValue,
-        keyId: entry.keyId,
-        dataType: entry.type,
+        keyId: existing.keyId,
+        dataType: existing.type,
         payload: value,
       });
     }
   }
 
   get(key: string): unknown {
-    const entry = this._registry.getByPath(key);
-    if (!entry) {
-      throw new DanWSError("KEY_NOT_REGISTERED", `Key not registered: "${key}"`);
-    }
-    return this._store.get(entry.keyId);
+    const entry = this._entries.get(key);
+    if (!entry) return undefined;
+    return entry.value;
   }
 
   get keys(): string[] {
-    return this._registry.paths;
+    return Array.from(this._entries.keys());
   }
 
-  /** @internal — build key registration frames + SYNC for a new session */
+  /**
+   * Clear a single key. Triggers re-sync.
+   */
+  clear(key: string): void;
+  /**
+   * Clear all keys. Triggers re-sync.
+   */
+  clear(): void;
+  clear(key?: string): void {
+    if (key !== undefined) {
+      if (this._entries.delete(key)) {
+        this._triggerResync();
+      }
+    } else {
+      if (this._entries.size > 0) {
+        this._entries.clear();
+        this._nextKeyId = 1;
+        this._triggerResync();
+      }
+    }
+  }
+
+  /** @internal — build key registration frames + SYNC for a session */
   _buildKeyFrames(): Frame[] {
     const frames: Frame[] = [];
-    for (const entry of this._registry.entries()) {
+    for (const entry of this._entries.values()) {
       frames.push({
         frameType: FrameType.ServerKeyRegistration,
         keyId: entry.keyId,
@@ -88,30 +136,31 @@ export class PrincipalTX {
     return frames;
   }
 
-  /** @internal — build value frames for all registered keys (full sync) */
+  /** @internal — build value frames for all keys (full sync) */
   _buildValueFrames(): Frame[] {
     const frames: Frame[] = [];
-    for (const entry of this._registry.entries()) {
-      if (this._store.has(entry.keyId)) {
+    for (const entry of this._entries.values()) {
+      if (entry.value !== undefined) {
         frames.push({
           frameType: FrameType.ServerValue,
           keyId: entry.keyId,
           dataType: entry.type,
-          payload: this._store.get(entry.keyId),
+          payload: entry.value,
         });
       }
     }
     return frames;
   }
 
-  get _registryRef(): KeyRegistry {
-    return this._registry;
+  private _triggerResync(): void {
+    if (this._onKeysChanged) {
+      this._onKeysChanged();
+    }
   }
 }
 
 /**
  * Manages all principals.
- * server.tx.principal("alice") returns the shared TX for "alice".
  */
 export class PrincipalManager {
   private _principals = new Map<string, PrincipalTX>();

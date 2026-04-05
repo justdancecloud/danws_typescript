@@ -170,6 +170,24 @@ export class DanWebSocketServer {
         }
       }
     });
+
+    ptx._onResync(() => {
+      // New key or type change — re-sync all sessions of this principal
+      for (const internal of this._sessions.values()) {
+        if (internal.session.principal === ptx.name &&
+            internal.session.connected &&
+            internal.ws && internal.ws.readyState === WS.OPEN) {
+          // Send RESET + new keys + SYNC → session waits for READY → sends values
+          const resetFrame: Frame = {
+            frameType: FrameType.ServerReset,
+            keyId: 0, dataType: DataType.Null, payload: null,
+          };
+          internal.bulkQueue.enqueue(resetFrame);
+          const keyFrames = ptx._buildKeyFrames();
+          for (const f of keyFrames) internal.bulkQueue.enqueue(f);
+        }
+      }
+    });
   }
 
   private _handleConnection(ws: WS): void {

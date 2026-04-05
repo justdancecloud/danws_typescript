@@ -8,9 +8,9 @@ Existing WebSocket libraries transmit JSON text, which is verbose and requires p
 
 - Minimizes bandwidth with typed binary serialization
 - Eliminates JSON parse/stringify overhead
-- Provides built-in key registration, state synchronization, and recovery
-- Supports automatic reconnection with offline queuing
+- Auto-detects data types — just `set(key, value)`
 - **Principal-based shared memory** — one state per authenticated user, synced to all their sessions
+- Supports automatic reconnection with exponential backoff
 
 ## Who is it for?
 
@@ -18,7 +18,6 @@ Existing WebSocket libraries transmit JSON text, which is verbose and requires p
 - **Multiplayer games** — server-authoritative state sync to players
 - **Financial data feeds** — real-time price streaming
 - **Remote monitoring** — push device state to operators
-- Any application needing efficient server→client state synchronization
 
 ## Installation
 
@@ -31,30 +30,35 @@ npm install dan-websocket
 ### Server
 
 ```typescript
-import { DanWebSocketServer, DataType } from "dan-websocket/server";
+import { DanWebSocketServer } from "dan-websocket/server";
 
 const server = new DanWebSocketServer({ port: 8080, path: "/ws" });
 
-// Enable authentication
+// Just set values — types are auto-detected
+server.tx.principal("alice").set("player.score", 0);
+server.tx.principal("alice").set("player.name", "Alice");
+server.tx.principal("alice").set("player.alive", true);
+
+// Update — all of alice's sessions (tabs, devices) get it
+server.tx.principal("alice").set("player.score", 100);
+
+// Read back
+server.tx.principal("alice").get("player.score"); // 100
+server.tx.principal("alice").keys;                // ["player.score", "player.name", "player.alive"]
+
+// Clean up
+server.tx.principal("alice").clear("player.alive"); // remove one key
+server.tx.principal("alice").clear();                // remove all keys
+
+// Authentication
 server.enableAuthorization(true);
 server.onAuthorize((uuid, token) => {
   const user = verifyToken(token);
   server.authorize(uuid, token, user.name); // 3rd arg = principal
 });
 
-// Set up data per principal (shared across all sessions of the same user)
-server.tx.principal("alice").updateKeys([
-  { path: "player.score", type: DataType.Uint32 },
-  { path: "player.name", type: DataType.String },
-]);
-server.tx.principal("alice").set("player.score", 0);
-server.tx.principal("alice").set("player.name", "Alice");
-
-// Update — all of alice's sessions (tabs, devices) get the update
-server.tx.principal("alice").set("player.score", 100);
-
-// Query sessions
-server.getSessionsByPrincipal("alice"); // all alice's sessions
+// Session management
+server.getSessionsByPrincipal("alice"); // all of alice's sessions
 ```
 
 ### Client
@@ -92,36 +96,37 @@ Principal "alice" ─── Shared State (1 copy in memory)
 - **Server→Client only** — the server pushes state, clients receive
 - **Principal-based** — data is managed per authenticated user, not per connection
 - **No duplication** — one state per principal, shared across all sessions
+- **Auto-type detection** — no need to declare types, just `set(key, value)`
 
-## Supported Data Types
+## Supported Data Types (auto-detected)
 
-| Type | JS Type | Size |
-|------|---------|------|
-| Null | `null` | 0 bytes |
-| Bool | `boolean` | 1 byte |
-| Uint8 | `number` | 1 byte |
-| Uint16 | `number` | 2 bytes |
-| Uint32 | `number` | 4 bytes |
-| Uint64 | `bigint` | 8 bytes |
-| Int32 | `number` | 4 bytes |
-| Int64 | `bigint` | 8 bytes |
-| Float32 | `number` | 4 bytes |
-| Float64 | `number` | 8 bytes |
-| String | `string` | variable |
-| Binary | `Uint8Array` | variable |
-| Timestamp | `Date` | 8 bytes |
+| JS Type | Wire Type | Size |
+|---------|-----------|------|
+| `null` | Null | 0 bytes |
+| `boolean` | Bool | 1 byte |
+| `number` | Float64 | 8 bytes |
+| `bigint` (≥0) | Uint64 | 8 bytes |
+| `bigint` (<0) | Int64 | 8 bytes |
+| `string` | String | variable |
+| `Uint8Array` | Binary | variable |
+| `Date` | Timestamp | 8 bytes |
 
 ## API Reference
 
-### Server
+### Server — `server.tx.principal(name)`
 
 | Method | Description |
 |--------|-------------|
-| `server.tx.principal(name)` | Get shared TX state for a principal |
-| `.updateKeys(keys)` | Register keys with types |
-| `.set(key, value)` | Set value (syncs to all sessions) |
+| `.set(key, value)` | Set value (auto-type, syncs to all sessions) |
 | `.get(key)` | Read current value |
 | `.keys` | List registered key paths |
+| `.clear(key)` | Remove a single key |
+| `.clear()` | Remove all keys |
+
+### Server — management
+
+| Method | Description |
+|--------|-------------|
 | `server.enableAuthorization(enabled, opts?)` | Enable/disable auth |
 | `server.authorize(uuid, token, principal)` | Accept auth, assign principal |
 | `server.reject(uuid, reason?)` | Reject auth |
@@ -142,17 +147,10 @@ Principal "alice" ─── Shared State (1 copy in memory)
 | `client.onReady(cb)` | Sync complete, data available |
 | `client.onReceive(cb)` | Value received: `(key, value)` |
 | `client.onDisconnect(cb)` | Connection lost |
-| `client.onReconnecting(cb)` | Reconnect attempt |
+| `client.onReconnecting(cb)` | Reconnect attempt: `(attempt, delay)` |
 | `client.onReconnect(cb)` | Reconnection successful |
+| `client.onReconnectFailed(cb)` | All retries exhausted |
 | `client.onError(cb)` | Protocol error |
-
-## Development Status
-
-- [x] Phase 1: Protocol Core (encode/decode, DLE escaping, stream parser)
-- [x] Phase 2: State Machine (handshake, key registry, auth, recovery)
-- [x] Phase 3: Connection Manager (bulk queue, heartbeat, reconnection)
-- [x] Phase 4: Public API (Principal-based Server, Client) + E2E Tests
-- [ ] Phase 5: npm Publish
 
 ## License
 

@@ -5,3 +5,4 @@ export { dleEncode, dleDecode } from "./dle.js";
 export { encode, decode, encodeBatch, encodeHeartbeat } from "./codec.js";
 export { createStreamParser } from "./stream-parser.js";
 export type { StreamParser } from "./stream-parser.js";
+export { detectDataType } from "./auto-type.js";
