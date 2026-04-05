@@ -44,9 +44,9 @@ describe("E2E: Auto-type set() API", () => {
     await waitFor(50);
 
     // Just set — no updateKeys needed
-    srv.tx.principal("default").set("greeting", "Hello");
-    srv.tx.principal("default").set("count", 42);
-    srv.tx.principal("default").set("active", true);
+    srv.principal("default").set("greeting", "Hello");
+    srv.principal("default").set("count", 42);
+    srv.principal("default").set("active", true);
 
     const client = createClient(19001);
     const received: Array<{ key: string; value: unknown }> = [];
@@ -70,7 +70,7 @@ describe("E2E: Auto-type set() API", () => {
     const srv = createServer(19002);
     await waitFor(50);
 
-    srv.tx.principal("default").set("score", 0);
+    srv.principal("default").set("score", 0);
 
     const client = createClient(19002);
     const values: unknown[] = [];
@@ -87,7 +87,7 @@ describe("E2E: Auto-type set() API", () => {
 
     expect(values).toContain(0);
 
-    srv.tx.principal("default").set("score", 100);
+    srv.principal("default").set("score", 100);
     await waitFor(200);
 
     expect(values).toContain(100);
@@ -97,47 +97,47 @@ describe("E2E: Auto-type set() API", () => {
     const srv = createServer(19003);
     await waitFor(50);
 
-    srv.tx.principal("test").set("a", 1);
-    srv.tx.principal("test").set("b", "hello");
-    srv.tx.principal("test").set("c", true);
+    srv.principal("test").set("a", 1);
+    srv.principal("test").set("b", "hello");
+    srv.principal("test").set("c", true);
 
-    expect(srv.tx.principal("test").keys.sort()).toEqual(["a", "b", "c"]);
+    expect(srv.principal("test").keys.sort()).toEqual(["a", "b", "c"]);
   });
 
   it("clear(key) removes a single key", async () => {
     const srv = createServer(19004);
     await waitFor(50);
 
-    srv.tx.principal("test").set("a", 1);
-    srv.tx.principal("test").set("b", 2);
+    srv.principal("test").set("a", 1);
+    srv.principal("test").set("b", 2);
 
-    srv.tx.principal("test").clear("a");
-    expect(srv.tx.principal("test").keys).toEqual(["b"]);
-    expect(srv.tx.principal("test").get("a")).toBeUndefined();
+    srv.principal("test").clear("a");
+    expect(srv.principal("test").keys).toEqual(["b"]);
+    expect(srv.principal("test").get("a")).toBeUndefined();
   });
 
   it("clear() removes all keys", async () => {
     const srv = createServer(19005);
     await waitFor(50);
 
-    srv.tx.principal("test").set("a", 1);
-    srv.tx.principal("test").set("b", 2);
+    srv.principal("test").set("a", 1);
+    srv.principal("test").set("b", 2);
 
-    srv.tx.principal("test").clear();
-    expect(srv.tx.principal("test").keys).toEqual([]);
+    srv.principal("test").clear();
+    expect(srv.principal("test").keys).toEqual([]);
   });
 
   it("auto-detects various types", async () => {
     const srv = createServer(19006);
     await waitFor(50);
 
-    srv.tx.principal("default").set("str", "hello");
-    srv.tx.principal("default").set("num", 3.14);
-    srv.tx.principal("default").set("bool", false);
-    srv.tx.principal("default").set("big", 9007199254740993n);
-    srv.tx.principal("default").set("bin", new Uint8Array([0xde, 0xad]));
-    srv.tx.principal("default").set("date", new Date("2026-01-01T00:00:00Z"));
-    srv.tx.principal("default").set("nil", null);
+    srv.principal("default").set("str", "hello");
+    srv.principal("default").set("num", 3.14);
+    srv.principal("default").set("bool", false);
+    srv.principal("default").set("big", 9007199254740993n);
+    srv.principal("default").set("bin", new Uint8Array([0xde, 0xad]));
+    srv.principal("default").set("date", new Date("2026-01-01T00:00:00Z"));
+    srv.principal("default").set("nil", null);
 
     const client = createClient(19006);
     let ready = false;
@@ -161,7 +161,7 @@ describe("E2E: Principal sharing", () => {
     const srv = createServer(19010);
     await waitFor(50);
 
-    srv.tx.principal("shared").set("data", "shared-value");
+    srv.principal("shared").set("data", "shared-value");
 
     srv.enableAuthorization(true);
     srv.onAuthorize((uuid, token) => {
@@ -186,7 +186,7 @@ describe("E2E: Principal sharing", () => {
     expect(c2.get("data")).toBe("shared-value");
 
     // Update — both get it
-    srv.tx.principal("shared").set("data", "updated");
+    srv.principal("shared").set("data", "updated");
     await waitFor(200);
 
     expect(c1.get("data")).toBe("updated");
@@ -197,8 +197,8 @@ describe("E2E: Principal sharing", () => {
     const srv = createServer(19011);
     await waitFor(50);
 
-    srv.tx.principal("alice").set("name", "Alice");
-    srv.tx.principal("bob").set("name", "Bob");
+    srv.principal("alice").set("name", "Alice");
+    srv.principal("bob").set("name", "Bob");
 
     srv.enableAuthorization(true);
     srv.onAuthorize((uuid, token) => {
@@ -253,7 +253,7 @@ describe("E2E: Session management", () => {
     srv.enableAuthorization(true);
     srv.onAuthorize((uuid, token) => srv.authorize(uuid, token, "alice"));
 
-    srv.tx.principal("alice").set("x", true);
+    srv.principal("alice").set("x", true);
 
     let uuid = "";
     srv.onConnection((s) => { uuid = s.id; });

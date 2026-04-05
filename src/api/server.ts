@@ -27,7 +27,7 @@ interface InternalSession {
 }
 
 export class DanWebSocketServer {
-  readonly tx: PrincipalManager;
+  private _principals: PrincipalManager;
 
   private _wss: WSServer;
   private _path: string;
@@ -55,9 +55,8 @@ export class DanWebSocketServer {
     this._path = options.path ?? "/";
     this._ttl = options.session?.ttl ?? 600_000;
 
-    // Principal-based TX
-    this.tx = new PrincipalManager();
-    this.tx._setOnNewPrincipal((ptx) => this._bindPrincipalTX(ptx));
+    this._principals = new PrincipalManager();
+    this._principals._setOnNewPrincipal((ptx) => this._bindPrincipalTX(ptx));
 
     // Create WebSocket server
     if (options.port != null) {
@@ -67,6 +66,10 @@ export class DanWebSocketServer {
     }
 
     this._wss.on("connection", (ws) => this._handleConnection(ws));
+  }
+
+  principal(name: string): PrincipalTX {
+    return this._principals.principal(name);
   }
 
   enableAuthorization(enabled: boolean, options?: { timeout?: number }): void {
@@ -349,7 +352,7 @@ export class DanWebSocketServer {
 
   private _activateSession(internal: InternalSession, principal: string): void {
     // Get or create principal TX
-    const ptx = this.tx.principal(principal);
+    const ptx = this._principals.principal(principal);
 
     // Bind session to principal's shared TX
     internal.session._setTxProviders(

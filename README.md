@@ -35,20 +35,20 @@ import { DanWebSocketServer } from "dan-websocket/server";
 const server = new DanWebSocketServer({ port: 8080, path: "/ws" });
 
 // Just set values — types are auto-detected
-server.tx.principal("alice").set("player.score", 0);
-server.tx.principal("alice").set("player.name", "Alice");
-server.tx.principal("alice").set("player.alive", true);
+server.principal("alice").set("player.score", 0);
+server.principal("alice").set("player.name", "Alice");
+server.principal("alice").set("player.alive", true);
 
 // Update — all of alice's sessions (tabs, devices) get it
-server.tx.principal("alice").set("player.score", 100);
+server.principal("alice").set("player.score", 100);
 
 // Read back
-server.tx.principal("alice").get("player.score"); // 100
-server.tx.principal("alice").keys;                // ["player.score", "player.name", "player.alive"]
+server.principal("alice").get("player.score"); // 100
+server.principal("alice").keys;                // ["player.score", "player.name", "player.alive"]
 
 // Clean up
-server.tx.principal("alice").clear("player.alive"); // remove one key
-server.tx.principal("alice").clear();                // remove all keys
+server.principal("alice").clear("player.alive"); // remove one key
+server.principal("alice").clear();                // remove all keys
 
 // Authentication
 server.enableAuthorization(true);
@@ -113,7 +113,7 @@ Principal "alice" ─── Shared State (1 copy in memory)
 
 ## API Reference
 
-### Server — `server.tx.principal(name)`
+### Server — `server.principal(name)`
 
 | Method | Description |
 |--------|-------------|
