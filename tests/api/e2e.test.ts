@@ -27,50 +27,50 @@ afterEach(() => {
   if (server) { try { server.close(); } catch {} server = null; }
 });
 
-function createServer(port: number) {
-  server = new DanWebSocketServer({ port, path: "/ws" });
-  return server;
-}
-
 function createClient(port: number, opts?: any) {
   const c = new DanWebSocketClient(`ws://127.0.0.1:${port}/ws`, opts);
   clients.push(c);
   return c;
 }
 
-describe("E2E: Auto-type set() API", () => {
-  it("set values, client receives them", async () => {
-    const srv = createServer(19001);
+// ────────────────────────────────────────────────
+// Broadcast Mode: server.set(key, value)
+// ────────────────────────────────────────────────
+
+describe("E2E: Broadcast Mode", () => {
+  it("server.set() syncs to all clients", async () => {
+    server = new DanWebSocketServer({ port: 19001, path: "/ws", mode: "broadcast" });
     await waitFor(50);
 
-    // Just set — no updateKeys needed
-    srv.principal("default").set("greeting", "Hello");
-    srv.principal("default").set("count", 42);
-    srv.principal("default").set("active", true);
+    server.set("greeting", "Hello");
+    server.set("count", 42);
+    server.set("active", true);
 
-    const client = createClient(19001);
-    const received: Array<{ key: string; value: unknown }> = [];
-    client.onReceive((key, value) => received.push({ key, value }));
+    const c1 = createClient(19001);
+    const c2 = createClient(19001);
 
-    let ready = false;
-    client.onReady(() => { ready = true; });
+    let r1 = false, r2 = false;
+    c1.onReady(() => { r1 = true; });
+    c2.onReady(() => { r2 = true; });
 
-    client.connect();
-    await waitUntil(() => ready);
+    c1.connect();
+    c2.connect();
+    await waitUntil(() => r1 && r2);
     await waitFor(200);
 
-    expect(client.get("greeting")).toBe("Hello");
-    expect(client.get("count")).toBe(42);
-    expect(client.get("active")).toBe(true);
-    expect(client.keys.sort()).toEqual(["active", "count", "greeting"]);
-    expect(received.length).toBeGreaterThanOrEqual(3);
+    expect(c1.get("greeting")).toBe("Hello");
+    expect(c1.get("count")).toBe(42);
+    expect(c1.get("active")).toBe(true);
+
+    expect(c2.get("greeting")).toBe("Hello");
+    expect(c2.get("count")).toBe(42);
   });
 
-  it("server updates value after client ready", async () => {
-    const srv = createServer(19002);
+  it("server.set() update after clients connected", async () => {
+    server = new DanWebSocketServer({ port: 19002, path: "/ws", mode: "broadcast" });
     await waitFor(50);
 
-    srv.principal("default").set("score", 0);
+    server.set("score", 0);
 
     const client = createClient(19002);
     const values: unknown[] = [];
@@ -87,59 +87,44 @@ describe("E2E: Auto-type set() API", () => {
 
     expect(values).toContain(0);
 
-    srv.principal("default").set("score", 100);
+    server.set("score", 100);
     await waitFor(200);
 
     expect(values).toContain(100);
+    expect(client.get("score")).toBe(100);
   });
 
-  it("principal.keys returns registered keys", async () => {
-    const srv = createServer(19003);
-    await waitFor(50);
+  it("server.get(), server.keys, server.clear()", async () => {
+    server = new DanWebSocketServer({ port: 19003, path: "/ws", mode: "broadcast" });
 
-    srv.principal("test").set("a", 1);
-    srv.principal("test").set("b", "hello");
-    srv.principal("test").set("c", true);
+    server.set("a", 1);
+    server.set("b", "hello");
+    server.set("c", true);
 
-    expect(srv.principal("test").keys.sort()).toEqual(["a", "b", "c"]);
+    expect(server.get("a")).toBe(1);
+    expect(server.keys.sort()).toEqual(["a", "b", "c"]);
+
+    server.clear("a");
+    expect(server.get("a")).toBeUndefined();
+    expect(server.keys.sort()).toEqual(["b", "c"]);
+
+    server.clear();
+    expect(server.keys).toEqual([]);
   });
 
-  it("clear(key) removes a single key", async () => {
-    const srv = createServer(19004);
+  it("auto-detects all types", async () => {
+    server = new DanWebSocketServer({ port: 19004, path: "/ws", mode: "broadcast" });
     await waitFor(50);
 
-    srv.principal("test").set("a", 1);
-    srv.principal("test").set("b", 2);
+    server.set("str", "hello");
+    server.set("num", 3.14);
+    server.set("bool", false);
+    server.set("big", 9007199254740993n);
+    server.set("bin", new Uint8Array([0xde, 0xad]));
+    server.set("date", new Date("2026-01-01T00:00:00Z"));
+    server.set("nil", null);
 
-    srv.principal("test").clear("a");
-    expect(srv.principal("test").keys).toEqual(["b"]);
-    expect(srv.principal("test").get("a")).toBeUndefined();
-  });
-
-  it("clear() removes all keys", async () => {
-    const srv = createServer(19005);
-    await waitFor(50);
-
-    srv.principal("test").set("a", 1);
-    srv.principal("test").set("b", 2);
-
-    srv.principal("test").clear();
-    expect(srv.principal("test").keys).toEqual([]);
-  });
-
-  it("auto-detects various types", async () => {
-    const srv = createServer(19006);
-    await waitFor(50);
-
-    srv.principal("default").set("str", "hello");
-    srv.principal("default").set("num", 3.14);
-    srv.principal("default").set("bool", false);
-    srv.principal("default").set("big", 9007199254740993n);
-    srv.principal("default").set("bin", new Uint8Array([0xde, 0xad]));
-    srv.principal("default").set("date", new Date("2026-01-01T00:00:00Z"));
-    srv.principal("default").set("nil", null);
-
-    const client = createClient(19006);
+    const client = createClient(19004);
     let ready = false;
     client.onReady(() => { ready = true; });
     client.connect();
@@ -154,56 +139,45 @@ describe("E2E: Auto-type set() API", () => {
     expect((client.get("date") as Date).getTime()).toBe(new Date("2026-01-01T00:00:00Z").getTime());
     expect(client.get("nil")).toBe(null);
   });
+
+  it("broadcast mode rejects server.principal()", () => {
+    server = new DanWebSocketServer({ port: 19005, path: "/ws", mode: "broadcast" });
+    expect(() => server!.principal("alice")).toThrow();
+  });
 });
 
-describe("E2E: Principal sharing", () => {
-  it("multiple clients share same principal data", async () => {
-    const srv = createServer(19010);
+// ────────────────────────────────────────────────
+// Individual Mode: server.principal(name).set(key, value)
+// ────────────────────────────────────────────────
+
+describe("E2E: Individual Mode", () => {
+  it("principal-based data sync", async () => {
+    server = new DanWebSocketServer({ port: 19010, path: "/ws", mode: "individual" });
     await waitFor(50);
 
-    srv.principal("shared").set("data", "shared-value");
+    server.principal("default").set("greeting", "Hello");
+    server.principal("default").set("count", 42);
 
-    srv.enableAuthorization(true);
-    srv.onAuthorize((uuid, token) => {
-      srv.authorize(uuid, token, "shared");
-    });
-
-    const c1 = createClient(19010);
-    const c2 = createClient(19010);
-    c1.onConnect(() => c1.authorize("t1"));
-    c2.onConnect(() => c2.authorize("t2"));
-
-    let r1 = false, r2 = false;
-    c1.onReady(() => { r1 = true; });
-    c2.onReady(() => { r2 = true; });
-
-    c1.connect();
-    c2.connect();
-    await waitUntil(() => r1 && r2);
+    const client = createClient(19010);
+    let ready = false;
+    client.onReady(() => { ready = true; });
+    client.connect();
+    await waitUntil(() => ready);
     await waitFor(200);
 
-    expect(c1.get("data")).toBe("shared-value");
-    expect(c2.get("data")).toBe("shared-value");
-
-    // Update — both get it
-    srv.principal("shared").set("data", "updated");
-    await waitFor(200);
-
-    expect(c1.get("data")).toBe("updated");
-    expect(c2.get("data")).toBe("updated");
+    expect(client.get("greeting")).toBe("Hello");
+    expect(client.get("count")).toBe(42);
   });
 
   it("different principals get different data", async () => {
-    const srv = createServer(19011);
+    server = new DanWebSocketServer({ port: 19011, path: "/ws", mode: "individual" });
     await waitFor(50);
 
-    srv.principal("alice").set("name", "Alice");
-    srv.principal("bob").set("name", "Bob");
+    server.principal("alice").set("name", "Alice");
+    server.principal("bob").set("name", "Bob");
 
-    srv.enableAuthorization(true);
-    srv.onAuthorize((uuid, token) => {
-      srv.authorize(uuid, token, token);
-    });
+    server.enableAuthorization(true);
+    server.onAuthorize((uuid, token) => server!.authorize(uuid, token, token));
 
     const cA = createClient(19011);
     const cB = createClient(19011);
@@ -222,17 +196,83 @@ describe("E2E: Principal sharing", () => {
     expect(cA.get("name")).toBe("Alice");
     expect(cB.get("name")).toBe("Bob");
   });
-});
 
-describe("E2E: Authentication", () => {
-  it("auth reject", async () => {
-    const srv = createServer(19020);
+  it("multiple sessions share same principal", async () => {
+    server = new DanWebSocketServer({ port: 19012, path: "/ws", mode: "individual" });
     await waitFor(50);
 
-    srv.enableAuthorization(true);
-    srv.onAuthorize((uuid) => srv.reject(uuid, "denied"));
+    server.principal("shared").set("data", "shared-value");
 
-    const client = createClient(19020, { reconnect: { enabled: false } });
+    server.enableAuthorization(true);
+    server.onAuthorize((uuid, token) => server!.authorize(uuid, token, "shared"));
+
+    const c1 = createClient(19012);
+    const c2 = createClient(19012);
+    c1.onConnect(() => c1.authorize("t1"));
+    c2.onConnect(() => c2.authorize("t2"));
+
+    let r1 = false, r2 = false;
+    c1.onReady(() => { r1 = true; });
+    c2.onReady(() => { r2 = true; });
+
+    c1.connect();
+    c2.connect();
+    await waitUntil(() => r1 && r2);
+    await waitFor(200);
+
+    expect(c1.get("data")).toBe("shared-value");
+    expect(c2.get("data")).toBe("shared-value");
+
+    server.principal("shared").set("data", "updated");
+    await waitFor(200);
+
+    expect(c1.get("data")).toBe("updated");
+    expect(c2.get("data")).toBe("updated");
+  });
+
+  it("individual mode rejects server.set()", () => {
+    server = new DanWebSocketServer({ port: 19013, path: "/ws", mode: "individual" });
+    expect(() => server!.set("key", "val")).toThrow();
+  });
+});
+
+// ────────────────────────────────────────────────
+// Authentication
+// ────────────────────────────────────────────────
+
+describe("E2E: Authentication", () => {
+  it("auth accept", async () => {
+    server = new DanWebSocketServer({ port: 19020, path: "/ws", mode: "individual" });
+    await waitFor(50);
+
+    server.enableAuthorization(true);
+    server.onAuthorize((uuid, token) => {
+      if (token === "valid") server!.authorize(uuid, token, "alice");
+      else server!.reject(uuid, "bad token");
+    });
+
+    server.principal("alice").set("user.name", "Alice");
+
+    const client = createClient(19020);
+    client.onConnect(() => client.authorize("valid"));
+
+    let ready = false;
+    client.onReady(() => { ready = true; });
+    client.connect();
+    await waitUntil(() => ready);
+    await waitFor(200);
+
+    expect(client.get("user.name")).toBe("Alice");
+  });
+
+  it("auth reject", async () => {
+    server = new DanWebSocketServer({ port: 19021, path: "/ws", mode: "individual" });
+    await waitFor(50);
+
+    server.enableAuthorization(true);
+    server.onAuthorize((uuid) => server!.reject(uuid, "denied"));
+
+    const client = createClient(19021, { reconnect: { enabled: false } });
     const errors: string[] = [];
     client.onConnect(() => client.authorize("bad"));
     client.onError((err) => errors.push(err.code));
@@ -245,18 +285,21 @@ describe("E2E: Authentication", () => {
   });
 });
 
+// ────────────────────────────────────────────────
+// Session management
+// ────────────────────────────────────────────────
+
 describe("E2E: Session management", () => {
   it("getSessionsByPrincipal and isConnected", async () => {
-    const srv = createServer(19030);
+    server = new DanWebSocketServer({ port: 19030, path: "/ws", mode: "individual" });
     await waitFor(50);
 
-    srv.enableAuthorization(true);
-    srv.onAuthorize((uuid, token) => srv.authorize(uuid, token, "alice"));
-
-    srv.principal("alice").set("x", true);
+    server.enableAuthorization(true);
+    server.onAuthorize((uuid, token) => server!.authorize(uuid, token, "alice"));
+    server.principal("alice").set("x", true);
 
     let uuid = "";
-    srv.onConnection((s) => { uuid = s.id; });
+    server.onConnection((s) => { uuid = s.id; });
 
     const client = createClient(19030);
     client.onConnect(() => client.authorize("token"));
@@ -266,14 +309,14 @@ describe("E2E: Session management", () => {
 
     await waitUntil(() => ready);
 
-    expect(srv.isConnected(uuid)).toBe(true);
-    expect(srv.getSession(uuid)!.principal).toBe("alice");
-    expect(srv.getSessionsByPrincipal("alice")).toHaveLength(1);
+    expect(server.isConnected(uuid)).toBe(true);
+    expect(server.getSession(uuid)!.principal).toBe("alice");
+    expect(server.getSessionsByPrincipal("alice")).toHaveLength(1);
 
     client.disconnect();
     await waitFor(200);
 
-    expect(srv.isConnected(uuid)).toBe(false);
-    expect(srv.getSession(uuid)).not.toBeNull();
+    expect(server.isConnected(uuid)).toBe(false);
+    expect(server.getSession(uuid)).not.toBeNull(); // Within TTL
   });
 });

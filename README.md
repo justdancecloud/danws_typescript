@@ -7,17 +7,10 @@ Lightweight binary protocol library for **real-time state synchronization** from
 Existing WebSocket libraries transmit JSON text, which is verbose and requires parsing overhead. **dan-websocket** uses a compact binary protocol (DanProtocol v2.0) that:
 
 - Minimizes bandwidth with typed binary serialization
-- Eliminates JSON parse/stringify overhead
 - Auto-detects data types — just `set(key, value)`
-- **Principal-based shared memory** — one state per authenticated user, synced to all their sessions
-- Supports automatic reconnection with exponential backoff
-
-## Who is it for?
-
-- **IoT dashboards** — push sensor readings to browser clients
-- **Multiplayer games** — server-authoritative state sync to players
-- **Financial data feeds** — real-time price streaming
-- **Remote monitoring** — push device state to operators
+- **1:N architecture** — one state syncs to many client sessions
+- Automatic reconnection, heartbeat, and recovery
+- Principal-based shared memory for per-user state management
 
 ## Installation
 
@@ -25,60 +18,64 @@ Existing WebSocket libraries transmit JSON text, which is verbose and requires p
 npm install dan-websocket
 ```
 
-## Quick Start
+## Two Modes
 
-### Server
+### Broadcast Mode — all clients get the same data
 
 ```typescript
 import { DanWebSocketServer } from "dan-websocket/server";
 
-const server = new DanWebSocketServer({ port: 8080, path: "/ws" });
+const server = new DanWebSocketServer({ port: 8080, mode: "broadcast" });
 
-// Just set values — types are auto-detected
-server.principal("alice").set("player.score", 0);
-server.principal("alice").set("player.name", "Alice");
-server.principal("alice").set("player.alive", true);
+// Set data — all connected clients receive it
+server.set("sensor.temp", 23.5);
+server.set("status", "online");
 
-// Update — all of alice's sessions (tabs, devices) get it
-server.principal("alice").set("player.score", 100);
+// Read, list, clear
+server.get("sensor.temp");    // 23.5
+server.keys;                  // ["sensor.temp", "status"]
+server.clear("status");       // remove one key
+server.clear();               // remove all
+```
 
-// Read back
-server.principal("alice").get("player.score"); // 100
-server.principal("alice").keys;                // ["player.score", "player.name", "player.alive"]
+### Individual Mode — per-user (principal) data
 
-// Clean up
-server.principal("alice").clear("player.alive"); // remove one key
-server.principal("alice").clear();                // remove all keys
+```typescript
+const server = new DanWebSocketServer({ port: 8080, mode: "individual" });
 
-// Authentication
+// Each principal has its own shared state
+server.principal("alice").set("score", 100);
+server.principal("bob").set("score", 200);
+
+// Alice's sessions (PC, mobile, etc.) all get score=100
+// Bob's sessions all get score=200
+
+// Authentication determines which principal a client belongs to
 server.enableAuthorization(true);
 server.onAuthorize((uuid, token) => {
   const user = verifyToken(token);
   server.authorize(uuid, token, user.name); // 3rd arg = principal
 });
-
-// Session management
-server.getSessionsByPrincipal("alice"); // all of alice's sessions
 ```
 
-### Client
+### Client (same for both modes)
 
 ```typescript
 import { DanWebSocketClient } from "dan-websocket";
 
-const client = new DanWebSocketClient("ws://localhost:8080/ws");
+const client = new DanWebSocketClient("ws://localhost:8080");
 
 client.onConnect(() => {
-  client.authorize(getToken());
+  client.authorize(getToken()); // if auth enabled
 });
 
 client.onReady(() => {
-  console.log("Score:", client.get("player.score"));
-  console.log("Keys:", client.keys);
+  console.log(client.get("score"));  // 100
+  console.log(client.keys);          // ["score"]
 });
 
 client.onReceive((key, value) => {
-  console.log(`${key} = ${value}`);
+  console.log(`${key} = ${value}`);  // real-time updates
 });
 
 client.connect();
@@ -87,18 +84,21 @@ client.connect();
 ## Architecture
 
 ```
-Principal "alice" ─── Shared State (1 copy in memory)
-  ├── Session A (PC browser)   ─── same data
-  ├── Session B (mobile app)   ─── same data
-  └── Session C (another tab)  ─── same data
+Broadcast:
+  Server State ─── 1 copy
+    ├── Client A ── same data
+    ├── Client B ── same data
+    └── Client C ── same data
+
+Individual:
+  Principal "alice" ─── 1 copy
+    ├── Session (PC)     ── same data
+    └── Session (mobile) ── same data
+  Principal "bob" ─── 1 copy
+    └── Session (tablet) ── own data
 ```
 
-- **Server→Client only** — the server pushes state, clients receive
-- **Principal-based** — data is managed per authenticated user, not per connection
-- **No duplication** — one state per principal, shared across all sessions
-- **Auto-type detection** — no need to declare types, just `set(key, value)`
-
-## Supported Data Types (auto-detected)
+## Auto-detected Data Types
 
 | JS Type | Wire Type | Size |
 |---------|-----------|------|
@@ -111,46 +111,55 @@ Principal "alice" ─── Shared State (1 copy in memory)
 | `Uint8Array` | Binary | variable |
 | `Date` | Timestamp | 8 bytes |
 
-## API Reference
+## API
 
-### Server — `server.principal(name)`
-
-| Method | Description |
-|--------|-------------|
-| `.set(key, value)` | Set value (auto-type, syncs to all sessions) |
-| `.get(key)` | Read current value |
-| `.keys` | List registered key paths |
-| `.clear(key)` | Remove a single key |
-| `.clear()` | Remove all keys |
-
-### Server — management
+### Server — Broadcast mode
 
 | Method | Description |
 |--------|-------------|
-| `server.enableAuthorization(enabled, opts?)` | Enable/disable auth |
-| `server.authorize(uuid, token, principal)` | Accept auth, assign principal |
+| `server.set(key, value)` | Set value, sync to all clients |
+| `server.get(key)` | Read value |
+| `server.keys` | List keys |
+| `server.clear(key?)` | Remove key(s) |
+
+### Server — Individual mode
+
+| Method | Description |
+|--------|-------------|
+| `server.principal(name).set(key, value)` | Set value for principal |
+| `server.principal(name).get(key)` | Read value |
+| `server.principal(name).keys` | List keys |
+| `server.principal(name).clear(key?)` | Remove key(s) |
+
+### Server — Common
+
+| Method | Description |
+|--------|-------------|
+| `server.enableAuthorization(enabled, opts?)` | Enable auth |
+| `server.authorize(uuid, token, principal)` | Accept auth |
 | `server.reject(uuid, reason?)` | Reject auth |
-| `server.getSession(uuid)` | Get session by ID |
-| `server.getSessionsByPrincipal(name)` | Get all sessions for a principal |
-| `server.isConnected(uuid)` | Check if session is connected |
+| `server.getSession(uuid)` | Get session |
+| `server.getSessionsByPrincipal(name)` | Get sessions by principal |
+| `server.isConnected(uuid)` | Check connection |
+| `server.close()` | Shutdown |
 
 ### Client
 
 | Method | Description |
 |--------|-------------|
-| `client.connect()` | Connect to server |
+| `client.connect()` | Connect |
 | `client.disconnect()` | Disconnect |
-| `client.authorize(token)` | Send auth token |
-| `client.get(key)` | Get current value |
-| `client.keys` | List received key paths |
-| `client.onConnect(cb)` | Connection established |
-| `client.onReady(cb)` | Sync complete, data available |
-| `client.onReceive(cb)` | Value received: `(key, value)` |
-| `client.onDisconnect(cb)` | Connection lost |
-| `client.onReconnecting(cb)` | Reconnect attempt: `(attempt, delay)` |
-| `client.onReconnect(cb)` | Reconnection successful |
-| `client.onReconnectFailed(cb)` | All retries exhausted |
-| `client.onError(cb)` | Protocol error |
+| `client.authorize(token)` | Auth |
+| `client.get(key)` | Get value |
+| `client.keys` | List keys |
+| `client.onReady(cb)` | Sync complete |
+| `client.onReceive(cb)` | Value update: `(key, value)` |
+| `client.onConnect(cb)` | Connected |
+| `client.onDisconnect(cb)` | Disconnected |
+| `client.onReconnecting(cb)` | Retrying: `(attempt, delay)` |
+| `client.onReconnect(cb)` | Reconnected |
+| `client.onReconnectFailed(cb)` | Gave up |
+| `client.onError(cb)` | Error |
 
 ## License
 
