@@ -3,6 +3,7 @@ import type { Frame } from "../protocol/types.js";
 import { serialize } from "../protocol/serializer.js";
 import { detectDataType } from "../protocol/auto-type.js";
 import { validateKeyPath } from "../state/key-registry.js";
+import { flattenValue, shouldFlatten } from "./flatten.js";
 
 interface KeyEntry {
   keyId: number;
@@ -22,6 +23,7 @@ export class PrincipalTX {
   private _needsResync = false;
   private _onValueSet: ((frame: Frame) => void) | null = null;
   private _onKeysChanged: (() => void) | null = null;
+  private _flattenedKeys = new Map<string, Set<string>>(); // prefix → set of flattened paths
 
   constructor(name: string) {
     this.name = name;
@@ -42,6 +44,32 @@ export class PrincipalTX {
    * If the key is new or its type changes, triggers re-sync to all sessions.
    */
   set(key: string, value: unknown): void {
+    if (shouldFlatten(value)) {
+      const flattened = flattenValue(key, value);
+      const newKeys = new Set(flattened.keys());
+      // Clear keys that were previously flattened but no longer exist
+      const oldKeys = this._flattenedKeys.get(key);
+      if (oldKeys) {
+        for (const oldPath of oldKeys) {
+          if (!newKeys.has(oldPath)) this._clearOne(oldPath);
+        }
+      }
+      this._flattenedKeys.set(key, newKeys);
+      for (const [path, leaf] of flattened) {
+        this._setLeaf(path, leaf);
+      }
+      return;
+    }
+    this._setLeaf(key, value);
+  }
+
+  private _clearOne(path: string): void {
+    if (this._entries.delete(path)) {
+      this._triggerResync();
+    }
+  }
+
+  private _setLeaf(key: string, value: unknown): void {
     validateKeyPath(key);
     const newType = detectDataType(value);
     serialize(newType, value); // validate
@@ -102,12 +130,19 @@ export class PrincipalTX {
   clear(): void;
   clear(key?: string): void {
     if (key !== undefined) {
-      if (this._entries.delete(key)) {
+      // If this was a flattened key, remove all its children
+      const flatKeys = this._flattenedKeys.get(key);
+      if (flatKeys) {
+        for (const path of flatKeys) this._entries.delete(path);
+        this._flattenedKeys.delete(key);
+        this._triggerResync();
+      } else if (this._entries.delete(key)) {
         this._triggerResync();
       }
     } else {
       if (this._entries.size > 0) {
         this._entries.clear();
+        this._flattenedKeys.clear();
         this._nextKeyId = 1;
         this._triggerResync();
       }

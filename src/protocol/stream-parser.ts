@@ -38,16 +38,16 @@ export function createStreamParser(): StreamParser {
   }
 
   function parseFrame(body: Uint8Array): Frame {
-    if (body.length < 4) {
+    if (body.length < 6) {
       throw new DanWSError("FRAME_PARSE_ERROR", `Frame body too short: ${body.length} bytes`);
     }
 
     const frameType = body[0] as FrameType;
-    const keyId = (body[1] << 8) | body[2];
-    const dataType = body[3] as DataType;
+    const keyId = ((body[1] << 24) | (body[2] << 16) | (body[3] << 8) | body[4]) >>> 0;
+    const dataType = body[5] as DataType;
 
     // Body is already DLE-decoded by the state machine
-    const rawPayload = body.subarray(4);
+    const rawPayload = body.subarray(6);
 
     let payload: unknown;
     if (frameType === FrameType.ServerKeyRegistration || frameType === FrameType.ClientKeyRegistration) {

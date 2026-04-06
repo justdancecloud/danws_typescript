@@ -21,13 +21,15 @@ export function encode(frame: Frame): Uint8Array {
     rawPayload = serialize(frame.dataType, frame.payload);
   }
 
-  // Build raw body: [FrameType:1] [KeyID:2] [DataType:1] [Payload:N]
-  const rawBody = new Uint8Array(4 + rawPayload.length);
+  // Build raw body: [FrameType:1] [KeyID:4] [DataType:1] [Payload:N]
+  const rawBody = new Uint8Array(6 + rawPayload.length);
   rawBody[0] = frame.frameType;
-  rawBody[1] = (frame.keyId >> 8) & 0xff;
-  rawBody[2] = frame.keyId & 0xff;
-  rawBody[3] = frame.dataType;
-  rawBody.set(rawPayload, 4);
+  rawBody[1] = (frame.keyId >>> 24) & 0xff;
+  rawBody[2] = (frame.keyId >>> 16) & 0xff;
+  rawBody[3] = (frame.keyId >>> 8) & 0xff;
+  rawBody[4] = frame.keyId & 0xff;
+  rawBody[5] = frame.dataType;
+  rawBody.set(rawPayload, 6);
 
   // DLE-escape the entire body (header + payload)
   const escapedBody = dleEncode(rawBody);
@@ -114,15 +116,15 @@ export function decode(bytes: Uint8Array): Frame[] {
     // DLE-decode the entire body first (header + payload), matching encode() which escapes the entire body
     const decoded = dleDecode(bytes.subarray(bodyStart, bodyEnd));
 
-    if (decoded.length < 4) {
-      throw new DanWSError("FRAME_PARSE_ERROR", `Frame body too short: ${decoded.length} bytes (minimum 4)`);
+    if (decoded.length < 6) {
+      throw new DanWSError("FRAME_PARSE_ERROR", `Frame body too short: ${decoded.length} bytes (minimum 6)`);
     }
 
     const frameType = decoded[0] as FrameType;
-    const keyId = (decoded[1] << 8) | decoded[2];
-    const dataType = decoded[3] as DataType;
+    const keyId = ((decoded[1] << 24) | (decoded[2] << 16) | (decoded[3] << 8) | decoded[4]) >>> 0;
+    const dataType = decoded[5] as DataType;
 
-    const rawPayload = decoded.subarray(4);
+    const rawPayload = decoded.subarray(6);
 
     // Deserialize payload
     let payload: unknown;

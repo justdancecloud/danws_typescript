@@ -3,6 +3,7 @@ import type { Frame } from "../protocol/types.js";
 import { serialize } from "../protocol/serializer.js";
 import { detectDataType } from "../protocol/auto-type.js";
 import { validateKeyPath } from "../state/key-registry.js";
+import { flattenValue, shouldFlatten } from "./flatten.js";
 import type { DanWebSocketSession } from "./session.js";
 
 export enum EventType {
@@ -25,6 +26,7 @@ export class TopicPayload {
   private _allocateKeyId: () => number;
   private _enqueue: ((frame: Frame) => void) | null = null;
   private _onResync: (() => void) | null = null;
+  private _flattenedKeys = new Map<string, Set<string>>();
 
   constructor(index: number, allocateKeyId: () => number) {
     this._index = index;
@@ -38,6 +40,63 @@ export class TopicPayload {
   }
 
   set(key: string, value: unknown): void {
+    if (shouldFlatten(value)) {
+      const flattened = flattenValue(key, value);
+      const newKeys = new Set(flattened.keys());
+      const oldKeys = this._flattenedKeys.get(key);
+      if (oldKeys) {
+        for (const oldPath of oldKeys) {
+          if (!newKeys.has(oldPath)) {
+            this._entries.delete(oldPath);
+          }
+        }
+      }
+      this._flattenedKeys.set(key, newKeys);
+      let needsResync = false;
+      for (const [path, leaf] of flattened) {
+        if (this._setLeafInternal(path, leaf)) needsResync = true;
+      }
+      if (needsResync && this._onResync) this._onResync();
+      return;
+    }
+    this._setLeafDirect(key, value);
+  }
+
+  /** Set leaf, return true if a resync is needed (new key or type change). */
+  private _setLeafInternal(key: string, value: unknown): boolean {
+    validateKeyPath(key);
+    const newType = detectDataType(value);
+    serialize(newType, value);
+
+    const existing = this._entries.get(key);
+
+    if (!existing) {
+      const entry: PayloadEntry = { keyId: this._allocateKeyId(), type: newType, value };
+      this._entries.set(key, entry);
+      return true;
+    }
+
+    if (existing.type !== newType) {
+      existing.type = newType;
+      existing.value = value;
+      return true;
+    }
+
+    if (existing.value === value) return false;
+
+    existing.value = value;
+    if (this._enqueue) {
+      this._enqueue({
+        frameType: FrameType.ServerValue,
+        keyId: existing.keyId,
+        dataType: existing.type,
+        payload: value,
+      });
+    }
+    return false;
+  }
+
+  private _setLeafDirect(key: string, value: unknown): void {
     validateKeyPath(key);
     const newType = detectDataType(value);
     serialize(newType, value);
@@ -83,12 +142,18 @@ export class TopicPayload {
 
   clear(key?: string): void {
     if (key !== undefined) {
-      if (this._entries.delete(key)) {
+      const flatKeys = this._flattenedKeys.get(key);
+      if (flatKeys) {
+        for (const path of flatKeys) this._entries.delete(path);
+        this._flattenedKeys.delete(key);
+        if (this._onResync) this._onResync();
+      } else if (this._entries.delete(key)) {
         if (this._onResync) this._onResync();
       }
     } else {
       if (this._entries.size > 0) {
         this._entries.clear();
+        this._flattenedKeys.clear();
         if (this._onResync) this._onResync();
       }
     }

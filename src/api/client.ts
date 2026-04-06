@@ -13,6 +13,7 @@ import { HeartbeatManager } from "../connection/heartbeat-manager.js";
 import { ReconnectEngine, type ReconnectOptions, DEFAULT_RECONNECT_OPTIONS } from "../connection/reconnect-engine.js";
 import { TopicClientHandle } from "./topic-client-handle.js";
 import type { TopicClientPayloadView } from "./topic-client-handle.js";
+import { createStateProxy } from "./state-proxy.js";
 
 export type ClientState =
   | "disconnected"
@@ -79,7 +80,7 @@ export class DanWebSocketClient {
   private _onReconnecting: Array<(attempt: number, delay: number) => void> = [];
   private _onReconnect: Array<() => void> = [];
   private _onReconnectFailed: Array<() => void> = [];
-  private _onUpdate: Array<(payload: { get(key: string): unknown; keys: string[] }) => void> = [];
+  private _onUpdate: Array<(payload: Record<string, any>) => void> = [];
   private _onError: Array<(err: DanWSError) => void> = [];
 
   constructor(url: string, options?: ClientOptions) {
@@ -105,6 +106,14 @@ export class DanWebSocketClient {
   /** List all server-registered key paths. */
   get keys(): string[] {
     return this._registry.paths;
+  }
+
+  /** Get a Proxy-based state view for nested object access. */
+  get data(): Record<string, any> {
+    return createStateProxy(
+      (key) => this.get(key),
+      () => this.keys,
+    );
   }
 
   connect(): void {
@@ -180,7 +189,7 @@ export class DanWebSocketClient {
   onDisconnect(cb: () => void): () => void { return this._on(this._onDisconnect, cb); }
   onReady(cb: () => void): () => void { return this._on(this._onReady, cb); }
   onReceive(cb: (key: string, value: unknown) => void): () => void { return this._on(this._onReceive, cb); }
-  onUpdate(cb: (payload: { get(key: string): unknown; keys: string[] }) => void): () => void { return this._on(this._onUpdate, cb); }
+  onUpdate(cb: (payload: Record<string, any>) => void): () => void { return this._on(this._onUpdate, cb); }
   onReconnecting(cb: (attempt: number, delay: number) => void): () => void { return this._on(this._onReconnecting, cb); }
   onReconnect(cb: () => void): () => void { return this._on(this._onReconnect, cb); }
   onReconnectFailed(cb: () => void): () => void { return this._on(this._onReconnectFailed, cb); }
@@ -322,9 +331,9 @@ export class DanWebSocketClient {
             for (const cb of this._onReceive) {
               try { cb(entry.path, frame.payload); } catch {}
             }
-            // Fire onUpdate with full state view
+            // Fire onUpdate with Proxy-based state view
             if (this._onUpdate.length > 0) {
-              const view = { get: (k: string) => this.get(k), keys: this.keys };
+              const view = createStateProxy((k) => this.get(k), () => this.keys);
               for (const cb of this._onUpdate) { try { cb(view); } catch {} }
             }
           }

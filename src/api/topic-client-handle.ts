@@ -1,4 +1,5 @@
 import { KeyRegistry } from "../state/key-registry.js";
+import { createStateProxy } from "./state-proxy.js";
 
 export interface TopicClientPayloadView {
   get(key: string): unknown;
@@ -26,6 +27,14 @@ export class TopicClientHandle {
     const entry = this._registry.getByPath(wirePath);
     if (!entry) return undefined;
     return this._storeGet(entry.keyId);
+  }
+
+  /** Get a Proxy-based data view for nested object access. */
+  get data(): Record<string, any> {
+    return createStateProxy(
+      (key) => this.get(key),
+      () => this.keys,
+    );
   }
 
   get keys(): string[] {
@@ -61,10 +70,10 @@ export class TopicClientHandle {
   }
 
   private _createPayloadView(): TopicClientPayloadView {
-    return {
-      get: (key: string) => this.get(key),
-      keys: this.keys,
-    };
+    return createStateProxy(
+      (key) => this.get(key),
+      () => this.keys,
+    ) as any;
   }
 
   get _idx(): number { return this._index; }

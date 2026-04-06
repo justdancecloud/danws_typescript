@@ -9,3 +9,4 @@ export { TopicHandle, TopicPayload, EventType } from "./topic-handle.js";
 export type { TopicCallback } from "./topic-handle.js";
 export { TopicClientHandle } from "./topic-client-handle.js";
 export type { TopicClientPayloadView } from "./topic-client-handle.js";
+export { createStateProxy } from "./state-proxy.js";

@@ -3,6 +3,7 @@ import type { Frame } from "../protocol/types.js";
 import { serialize } from "../protocol/serializer.js";
 import { detectDataType } from "../protocol/auto-type.js";
 import { validateKeyPath } from "../state/key-registry.js";
+import { flattenValue, shouldFlatten } from "./flatten.js";
 import { TopicHandle, TopicPayload } from "./topic-handle.js";
 
 export type SessionState = "pending" | "authorized" | "synchronizing" | "ready" | "disconnected";
@@ -46,6 +47,7 @@ export class DanWebSocketSession {
   private _nextKeyId = 1; // global keyId counter — shared by flat session keys and all topic payloads
   private _sessionEnqueue: ((frame: Frame) => void) | null = null;
   private _sessionBound = false;
+  private _flattenedKeys = new Map<string, Set<string>>();
 
   // ──── Topic handles ────
   private _topicHandles = new Map<string, TopicHandle>();
@@ -84,6 +86,26 @@ export class DanWebSocketSession {
     if (!this._sessionBound) {
       throw new DanWSError("INVALID_MODE", "session.set() is only available in topic modes.");
     }
+    if (shouldFlatten(value)) {
+      const flattened = flattenValue(key, value);
+      const newKeys = new Set(flattened.keys());
+      const oldKeys = this._flattenedKeys.get(key);
+      if (oldKeys) {
+        for (const oldPath of oldKeys) {
+          if (!newKeys.has(oldPath)) this._sessionEntries.delete(oldPath);
+        }
+      }
+      this._flattenedKeys.set(key, newKeys);
+      for (const [path, leaf] of flattened) {
+        this._setLeaf(path, leaf);
+      }
+      this._triggerSessionResync();
+      return;
+    }
+    this._setLeaf(key, value);
+  }
+
+  private _setLeaf(key: string, value: unknown): void {
     validateKeyPath(key);
     const newType = detectDataType(value);
     serialize(newType, value);
@@ -132,10 +154,18 @@ export class DanWebSocketSession {
   clearKey(key?: string): void {
     if (!this._sessionBound) return;
     if (key !== undefined) {
-      if (this._sessionEntries.delete(key)) this._triggerSessionResync();
+      const flatKeys = this._flattenedKeys.get(key);
+      if (flatKeys) {
+        for (const path of flatKeys) this._sessionEntries.delete(path);
+        this._flattenedKeys.delete(key);
+        this._triggerSessionResync();
+      } else if (this._sessionEntries.delete(key)) {
+        this._triggerSessionResync();
+      }
     } else {
       if (this._sessionEntries.size > 0) {
         this._sessionEntries.clear();
+        this._flattenedKeys.clear();
         this._triggerSessionResync();
       }
     }
