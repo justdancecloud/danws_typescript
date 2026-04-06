@@ -1,6 +1,6 @@
 {
   "name": "dan-websocket",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Lightweight binary protocol for real-time state synchronization",
   "type": "module",
   "exports": {

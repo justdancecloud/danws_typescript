@@ -77,7 +77,13 @@ export class TopicPayload {
     if (!existing) {
       const entry: PayloadEntry = { keyId: this._allocateKeyId(), type: newType, value };
       this._entries.set(key, entry);
-      return true;
+      if (this._enqueue) {
+        const wirePath = this._wirePathCache.get(key) ?? (() => { const p = `t.${this._index}.${key}`; this._wirePathCache.set(key, p); return p; })();
+        this._enqueue({ frameType: FrameType.ServerKeyRegistration, keyId: entry.keyId, dataType: entry.type, payload: wirePath });
+        this._enqueue({ frameType: FrameType.ServerSync, keyId: 0, dataType: DataType.Null, payload: null });
+        this._enqueue({ frameType: FrameType.ServerValue, keyId: entry.keyId, dataType: entry.type, payload: entry.value });
+      }
+      return false;  // sent incrementally, no resync needed
     }
 
     if (existing.type !== newType) {
@@ -110,7 +116,12 @@ export class TopicPayload {
     if (!existing) {
       const entry: PayloadEntry = { keyId: this._allocateKeyId(), type: newType, value };
       this._entries.set(key, entry);
-      if (this._onResync) this._onResync();
+      if (this._enqueue) {
+        const wirePath = this._wirePathCache.get(key) ?? (() => { const p = `t.${this._index}.${key}`; this._wirePathCache.set(key, p); return p; })();
+        this._enqueue({ frameType: FrameType.ServerKeyRegistration, keyId: entry.keyId, dataType: entry.type, payload: wirePath });
+        this._enqueue({ frameType: FrameType.ServerSync, keyId: 0, dataType: DataType.Null, payload: null });
+        this._enqueue({ frameType: FrameType.ServerValue, keyId: entry.keyId, dataType: entry.type, payload: entry.value });
+      }
       return;
     }
 

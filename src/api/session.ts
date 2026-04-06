@@ -118,7 +118,11 @@ export class DanWebSocketSession {
         path: key, type: newType, value,
       };
       this._sessionEntries.set(key, entry);
-      this._triggerSessionResync();
+      if (this._sessionEnqueue) {
+        this._sessionEnqueue({ frameType: FrameType.ServerKeyRegistration, keyId: entry.keyId, dataType: entry.type, payload: entry.path });
+        this._sessionEnqueue({ frameType: FrameType.ServerSync, keyId: 0, dataType: DataType.Null, payload: null });
+        this._sessionEnqueue({ frameType: FrameType.ServerValue, keyId: entry.keyId, dataType: entry.type, payload: entry.value });
+      }
       return;
     }
 

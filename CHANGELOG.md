@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.3 (2026-04-07)
+- Perf: Incremental key registration for Session and TopicPayload (3 frames instead of full resync)
+- Add: BigDecimal → Float64, BigInteger → Int64 (or String if overflow) auto-detection (Java)
+- Add: Short → Int32, Byte → Uint8 auto-detection (Java)
+
 ## 1.0.2 (2026-04-07)
 - Perf: Principal session index — O(1) lookup instead of O(N) scan on every value set
 - Perf: PrincipalTX key frame caching — avoid rebuilding on every resync
