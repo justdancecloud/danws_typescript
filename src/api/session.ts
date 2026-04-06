@@ -43,7 +43,7 @@ export class DanWebSocketSession {
 
   // ──── Session-level flat TX store (topic modes backward compat) ────
   private _sessionEntries = new Map<string, KeyEntry>();
-  private _sessionNextKeyId = 50001; // flat session keys start at 50001 to avoid topic payload keyId collision
+  private _nextKeyId = 1; // global keyId counter — shared by flat session keys and all topic payloads
   private _sessionEnqueue: ((frame: Frame) => void) | null = null;
   private _sessionBound = false;
 
@@ -63,9 +63,9 @@ export class DanWebSocketSession {
 
   // ──── Event registration ────
 
-  onReady(cb: () => void): void { this._onReady.push(cb); }
-  onDisconnect(cb: () => void): void { this._onDisconnect.push(cb); }
-  onError(cb: (err: DanWSError) => void): void { this._onError.push(cb); }
+  onReady(cb: () => void): () => void { return this._on(this._onReady, cb); }
+  onDisconnect(cb: () => void): () => void { return this._on(this._onDisconnect, cb); }
+  onError(cb: (err: DanWSError) => void): () => void { return this._on(this._onError, cb); }
 
   disconnect(): void {
     this._connected = false;
@@ -92,7 +92,7 @@ export class DanWebSocketSession {
 
     if (!existing) {
       const entry: KeyEntry = {
-        keyId: this._sessionNextKeyId++,
+        keyId: this._nextKeyId++,
         path: key, type: newType, value,
       };
       this._sessionEntries.set(key, entry);
@@ -136,7 +136,6 @@ export class DanWebSocketSession {
     } else {
       if (this._sessionEntries.size > 0) {
         this._sessionEntries.clear();
-        this._sessionNextKeyId = 50001;
         this._triggerSessionResync();
       }
     }
@@ -278,7 +277,7 @@ export class DanWebSocketSession {
   _createTopicHandle(name: string, params: Record<string, unknown>, wireIndex?: number): TopicHandle {
     const index = wireIndex ?? this._topicIndex++;
     if (index >= this._topicIndex) this._topicIndex = index + 1;
-    const payload = new TopicPayload(index);
+    const payload = new TopicPayload(index, () => this._nextKeyId++);
     if (this._sessionEnqueue) {
       payload._bind(this._sessionEnqueue, () => this._triggerSessionResync());
     }
@@ -360,6 +359,11 @@ export class DanWebSocketSession {
         this._sessionEnqueue(f);
       }
     }
+  }
+
+  private _on<T extends (...args: any[]) => void>(arr: T[], cb: T): () => void {
+    arr.push(cb);
+    return () => { const i = arr.indexOf(cb); if (i !== -1) arr.splice(i, 1); };
   }
 
   private _emit<T extends unknown[]>(callbacks: Array<(...args: T) => void>, ...args: T): void {

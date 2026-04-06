@@ -69,6 +69,7 @@ export class DanWebSocketClient {
   private _bulkQueue = new BulkQueue();
   private _heartbeat = new HeartbeatManager();
   private _reconnectEngine: ReconnectEngine;
+  private _parser = createStreamParser();
 
   // Callbacks
   private _onConnect: Array<() => void> = [];
@@ -86,6 +87,9 @@ export class DanWebSocketClient {
     this.id = generateUUIDv7();
     const reconnectOpts = { ...DEFAULT_RECONNECT_OPTIONS, ...options?.reconnect };
     this._reconnectEngine = new ReconnectEngine(reconnectOpts);
+    this._parser.onFrame((frame) => this._handleFrame(frame));
+    this._parser.onHeartbeat(() => this._heartbeat.received());
+    this._parser.onError((err) => { if (err instanceof DanWSError) this._emitError(err); });
     this._setupInternals();
   }
 
@@ -172,15 +176,15 @@ export class DanWebSocketClient {
 
   // ──── Event registration ────
 
-  onConnect(cb: () => void): void { this._onConnect.push(cb); }
-  onDisconnect(cb: () => void): void { this._onDisconnect.push(cb); }
-  onReady(cb: () => void): void { this._onReady.push(cb); }
-  onReceive(cb: (key: string, value: unknown) => void): void { this._onReceive.push(cb); }
-  onUpdate(cb: (payload: { get(key: string): unknown; keys: string[] }) => void): void { this._onUpdate.push(cb); }
-  onReconnecting(cb: (attempt: number, delay: number) => void): void { this._onReconnecting.push(cb); }
-  onReconnect(cb: () => void): void { this._onReconnect.push(cb); }
-  onReconnectFailed(cb: () => void): void { this._onReconnectFailed.push(cb); }
-  onError(cb: (err: DanWSError) => void): void { this._onError.push(cb); }
+  onConnect(cb: () => void): () => void { return this._on(this._onConnect, cb); }
+  onDisconnect(cb: () => void): () => void { return this._on(this._onDisconnect, cb); }
+  onReady(cb: () => void): () => void { return this._on(this._onReady, cb); }
+  onReceive(cb: (key: string, value: unknown) => void): () => void { return this._on(this._onReceive, cb); }
+  onUpdate(cb: (payload: { get(key: string): unknown; keys: string[] }) => void): () => void { return this._on(this._onUpdate, cb); }
+  onReconnecting(cb: (attempt: number, delay: number) => void): () => void { return this._on(this._onReconnecting, cb); }
+  onReconnect(cb: () => void): () => void { return this._on(this._onReconnect, cb); }
+  onReconnectFailed(cb: () => void): () => void { return this._on(this._onReconnectFailed, cb); }
+  onError(cb: (err: DanWSError) => void): () => void { return this._on(this._onError, cb); }
 
   // ──── Internals ────
 
@@ -238,14 +242,7 @@ export class DanWebSocketClient {
     const bytes = data instanceof ArrayBuffer
       ? new Uint8Array(data)
       : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-
-    const parser = createStreamParser();
-    parser.onFrame((frame) => this._handleFrame(frame));
-    parser.onHeartbeat(() => this._heartbeat.received());
-    parser.onError((err) => {
-      if (err instanceof DanWSError) this._emitError(err);
-    });
-    parser.feed(bytes);
+    this._parser.feed(bytes);
   }
 
   private _handleFrame(frame: Frame): void {
@@ -458,6 +455,11 @@ export class DanWebSocketClient {
       try { this._ws.close(); } catch {}
       this._ws = null;
     }
+  }
+
+  private _on<T extends (...args: any[]) => void>(arr: T[], cb: T): () => void {
+    arr.push(cb);
+    return () => { const i = arr.indexOf(cb); if (i !== -1) arr.splice(i, 1); };
   }
 
   private _emit<T extends unknown[]>(callbacks: Array<(...args: T) => void>, ...args: T): void {

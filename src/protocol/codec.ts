@@ -111,19 +111,18 @@ export function decode(bytes: Uint8Array): Frame[] {
     }
 
     // Body is everything between DLE STX and DLE ETX (still DLE-escaped)
-    const body = bytes.subarray(bodyStart, bodyEnd);
+    // DLE-decode the entire body first (header + payload), matching encode() which escapes the entire body
+    const decoded = dleDecode(bytes.subarray(bodyStart, bodyEnd));
 
-    if (body.length < 4) {
-      throw new DanWSError("FRAME_PARSE_ERROR", `Frame body too short: ${body.length} bytes (minimum 4)`);
+    if (decoded.length < 4) {
+      throw new DanWSError("FRAME_PARSE_ERROR", `Frame body too short: ${decoded.length} bytes (minimum 4)`);
     }
 
-    const frameType = body[0] as FrameType;
-    const keyId = (body[1] << 8) | body[2];
-    const dataType = body[3] as DataType;
+    const frameType = decoded[0] as FrameType;
+    const keyId = (decoded[1] << 8) | decoded[2];
+    const dataType = decoded[3] as DataType;
 
-    // Extract and DLE-unescape the payload portion
-    const rawEscapedPayload = body.subarray(4);
-    const rawPayload = dleDecode(rawEscapedPayload);
+    const rawPayload = decoded.subarray(4);
 
     // Deserialize payload
     let payload: unknown;

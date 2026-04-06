@@ -39,12 +39,14 @@ export class TopicClientHandle {
     return result;
   }
 
-  onReceive(cb: (key: string, value: unknown) => void): void {
+  onReceive(cb: (key: string, value: unknown) => void): () => void {
     this._onReceive.push(cb);
+    return () => { const i = this._onReceive.indexOf(cb); if (i !== -1) this._onReceive.splice(i, 1); };
   }
 
-  onUpdate(cb: (payload: TopicClientPayloadView) => void): void {
+  onUpdate(cb: (payload: TopicClientPayloadView) => void): () => void {
     this._onUpdate.push(cb);
+    return () => { const i = this._onUpdate.indexOf(cb); if (i !== -1) this._onUpdate.splice(i, 1); };
   }
 
   /** @internal — fire callbacks for a key update */

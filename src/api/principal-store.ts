@@ -216,12 +216,12 @@ export class PrincipalManager {
     this._sessionCounts.set(principal, (this._sessionCounts.get(principal) ?? 0) + 1);
   }
 
-  /** @internal — returns true if principal has no more sessions (should be cleaned up) */
+  /** @internal — returns true if principal has no more active sessions.
+   *  Does NOT delete PrincipalTX data — use delete() for explicit cleanup. */
   _removeSession(principal: string): boolean {
     const count = (this._sessionCounts.get(principal) ?? 1) - 1;
     if (count <= 0) {
       this._sessionCounts.delete(principal);
-      this._principals.delete(principal);
       return true;
     }
     this._sessionCounts.set(principal, count);

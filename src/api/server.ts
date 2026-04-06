@@ -21,6 +21,7 @@ export interface ServerOptions {
   path?: string;
   mode?: ServerMode;
   session?: { ttl?: number };
+  debug?: boolean | ((msg: string, err?: Error) => void);
 }
 
 interface InternalSession {
@@ -54,6 +55,7 @@ export class DanWebSocketServer {
   private _ttl: number;
   private _authEnabled = false;
   private _authTimeout = 5000;
+  private _debug: boolean | ((msg: string, err?: Error) => void) = false;
 
   private _sessions = new Map<string, InternalSession>();
   private _tmpSessions = new Map<string, InternalSession>();
@@ -80,6 +82,7 @@ export class DanWebSocketServer {
 
     this._path = options.path ?? "/";
     this._ttl = options.session?.ttl ?? 600_000;
+    this._debug = options.debug ?? false;
 
     // Topic namespace
     const ns: TopicNamespace = {
@@ -212,6 +215,7 @@ export class DanWebSocketServer {
       internal.heartbeat.stop();
       internal.bulkQueue.dispose();
       if (internal.ttlTimer) clearTimeout(internal.ttlTimer);
+      if (internal.ws) { try { internal.ws.close(1001, "Server shutting down"); } catch {} }
     }
     for (const internal of this._tmpSessions.values()) {
       internal.authController.clearTimeout();
@@ -232,6 +236,11 @@ export class DanWebSocketServer {
   onTopicParamsChange(cb: (session: DanWebSocketSession, topic: TopicInfo) => void): void { this._onTopicParamsChange.push(cb); }
 
   // ──── Mode guard ────
+
+  private _log(msg: string, err?: Error): void {
+    if (typeof this._debug === "function") this._debug(msg, err);
+    else if (this._debug) console.warn(`[dan-ws] ${msg}`, err ?? "");
+  }
 
   private _assertMode(expected: string, method: string): void {
     if (this.mode !== expected) {
@@ -306,7 +315,7 @@ export class DanWebSocketServer {
         if (internal && this._authEnabled) {
           const token = frame.payload as string;
           internal.authController.handleAuth(token);
-          for (const cb of this._onAuthorize) { try { cb(clientUuid, token); } catch {} }
+          for (const cb of this._onAuthorize) { try { cb(clientUuid, token); } catch (e) { this._log("onAuthorize callback error", e as Error); } }
         }
         return;
       }
@@ -330,7 +339,7 @@ export class DanWebSocketServer {
       if (internal) internal.session._handleFrame(frame);
     });
 
-    parser.onError(() => {});
+    parser.onError((err) => { this._log("Stream parser error", err instanceof Error ? err : new Error(String(err))); });
 
     ws.on("message", (data: Buffer | ArrayBuffer) => {
       const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
@@ -399,7 +408,7 @@ export class DanWebSocketServer {
   private _activateSession(internal: InternalSession, principal: string): void {
     if (this._isTopicMode) {
       internal.session._bindSessionTX((f) => internal.bulkQueue.enqueue(f));
-      for (const cb of this._onConnection) { try { cb(internal.session); } catch {} }
+      for (const cb of this._onConnection) { try { cb(internal.session); } catch (e) { this._log("onConnection callback error", e as Error); } }
       internal.bulkQueue.enqueue({
         frameType: FrameType.ServerSync,
         keyId: 0, dataType: DataType.Null, payload: null,
@@ -414,7 +423,7 @@ export class DanWebSocketServer {
         () => ptx._buildValueFrames(),
       );
 
-      for (const cb of this._onConnection) { try { cb(internal.session); } catch {} }
+      for (const cb of this._onConnection) { try { cb(internal.session); } catch (e) { this._log("onConnection callback error", e as Error); } }
       internal.session._startSync();
     }
   }
@@ -497,10 +506,10 @@ export class DanWebSocketServer {
         // Fire new API callbacks
         const handle = session.getTopicHandle(oldName);
         if (handle) {
-          for (const cb of this.topic._onUnsubscribeCbs) { try { cb(session, handle); } catch {} }
+          for (const cb of this.topic._onUnsubscribeCbs) { try { cb(session, handle); } catch (e) { this._log("topic.onUnsubscribe callback error", e as Error); } }
         }
         // Fire backward compat callbacks
-        for (const cb of this._onTopicUnsubscribe) { try { cb(session, oldName); } catch {} }
+        for (const cb of this._onTopicUnsubscribe) { try { cb(session, oldName); } catch (e) { this._log("onTopicUnsubscribe callback error", e as Error); } }
         // Remove
         session._removeTopicHandle(oldName);
         session._removeTopic(oldName);
@@ -517,9 +526,9 @@ export class DanWebSocketServer {
         const clientIdx = nameToIndex.get(name) ?? session._nextTopicIndex;
         const handle = session._createTopicHandle(name, params, clientIdx);
         // Fire new API callbacks
-        for (const cb of this.topic._onSubscribeCbs) { try { cb(session, handle); } catch {} }
+        for (const cb of this.topic._onSubscribeCbs) { try { cb(session, handle); } catch (e) { this._log("topic.onSubscribe callback error", e as Error); } }
         // Fire backward compat callbacks
-        for (const cb of this._onTopicSubscribe) { try { cb(session, { name, params }); } catch {} }
+        for (const cb of this._onTopicSubscribe) { try { cb(session, { name, params }); } catch (e) { this._log("onTopicSubscribe callback error", e as Error); } }
       } else {
         // Check params changed
         const oldParams = existingHandle ? existingHandle.params : existingInfo?.params;
@@ -531,7 +540,7 @@ export class DanWebSocketServer {
           }
           // Update backward compat
           session._updateTopicParams(name, params);
-          for (const cb of this._onTopicParamsChange) { try { cb(session, { name, params }); } catch {} }
+          for (const cb of this._onTopicParamsChange) { try { cb(session, { name, params }); } catch (e) { this._log("onTopicParamsChange callback error", e as Error); } }
         }
       }
     }
@@ -562,7 +571,7 @@ export class DanWebSocketServer {
         const effectivePrincipal = this.mode === "broadcast" ? BROADCAST_PRINCIPAL : principal;
         this._principals._removeSession(effectivePrincipal);
       }
-      for (const cb of this._onSessionExpired) { try { cb(internal.session); } catch {} }
+      for (const cb of this._onSessionExpired) { try { cb(internal.session); } catch (e) { this._log("onSessionExpired callback error", e as Error); } }
     }, this._ttl);
   }
 

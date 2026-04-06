@@ -37,7 +37,7 @@ export enum FrameType {
   Identify = 0x0d,
   Auth = 0x0e,
   AuthOk = 0x0f,
-  AuthFail = 0x10,
+  AuthFail = 0x11,
 }
 
 export interface Frame {

@@ -21,14 +21,14 @@ interface PayloadEntry {
 
 export class TopicPayload {
   private _entries = new Map<string, PayloadEntry>();
-  private _nextKeyId: number;
   private _index: number;
+  private _allocateKeyId: () => number;
   private _enqueue: ((frame: Frame) => void) | null = null;
   private _onResync: (() => void) | null = null;
 
-  constructor(index: number) {
+  constructor(index: number, allocateKeyId: () => number) {
     this._index = index;
-    this._nextKeyId = index * 10000 + 1; // avoid keyId collisions between topics
+    this._allocateKeyId = allocateKeyId;
   }
 
   /** @internal */
@@ -45,7 +45,7 @@ export class TopicPayload {
     const existing = this._entries.get(key);
 
     if (!existing) {
-      const entry: PayloadEntry = { keyId: this._nextKeyId++, type: newType, value };
+      const entry: PayloadEntry = { keyId: this._allocateKeyId(), type: newType, value };
       this._entries.set(key, entry);
       if (this._onResync) this._onResync();
       return;
