@@ -150,7 +150,7 @@ export class TopicHandle {
   setCallback(fn: TopicCallback): void {
     this._callback = fn;
     // Run immediately with SubscribeEvent
-    try { fn(EventType.SubscribeEvent, this, this._session); } catch {}
+    try { const r = fn(EventType.SubscribeEvent, this, this._session); if (r instanceof Promise) r.catch(() => {}); } catch {}
   }
 
   setDelayedTask(ms: number): void {
@@ -158,7 +158,7 @@ export class TopicHandle {
     this._delayMs = ms;
     this._timer = setInterval(() => {
       if (this._callback) {
-        try { this._callback(EventType.DelayedTaskEvent, this, this._session); } catch {}
+        try { const r = this._callback(EventType.DelayedTaskEvent, this, this._session); if (r instanceof Promise) r.catch(() => {}); } catch {}
       }
     }, ms);
   }
@@ -179,7 +179,7 @@ export class TopicHandle {
     this.clearDelayedTask();
 
     if (this._callback) {
-      try { this._callback(EventType.ChangedParamsEvent, this, this._session); } catch {}
+      try { const r = this._callback(EventType.ChangedParamsEvent, this, this._session); if (r instanceof Promise) r.catch(() => {}); } catch {}
     }
 
     if (hadTask && savedMs !== null) {
