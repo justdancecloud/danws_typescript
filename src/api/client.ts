@@ -287,12 +287,14 @@ export class DanWebSocketClient {
         if (wasIdentifying) {
           this._state = "synchronizing";
         }
-        // Send Client READY
-        const readyFrame: Frame = {
-          frameType: FrameType.ClientReady,
-          keyId: 0, dataType: DataType.Null, payload: null,
-        };
-        this._bulkQueue.enqueue(readyFrame);
+        // Send Client READY during sync (not when already ready — avoids redundant full value re-send)
+        if (this._state !== "ready") {
+          const readyFrame: Frame = {
+            frameType: FrameType.ClientReady,
+            keyId: 0, dataType: DataType.Null, payload: null,
+          };
+          this._bulkQueue.enqueue(readyFrame);
+        }
 
         // If no keys were registered before SYNC, server has no data → go ready immediately
         if (this._registry.size === 0) {

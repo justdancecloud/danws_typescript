@@ -392,6 +392,7 @@ export class DanWebSocketSession {
   _handleFrame(frame: Frame): void {
     switch (frame.frameType) {
       case FrameType.ClientReady:
+        if (this._state === "ready") return; // already synced — ignore
         this._clientReadyReceived = true;
         if (this._txValueFrameProvider && this._enqueueFrame) {
           for (const vf of this._txValueFrameProvider()) this._enqueueFrame(vf);

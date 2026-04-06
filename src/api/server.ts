@@ -324,7 +324,7 @@ export class DanWebSocketServer {
       const internal = this._sessions.get(clientUuid) ?? this._tmpSessions.get(clientUuid);
       if (internal) {
         internal.heartbeat.received();
-        if (internal.ws && internal.ws.readyState === WS.OPEN) internal.ws.send(encodeHeartbeat());
+        // No echo — server sends its own heartbeat on a timer via HeartbeatManager
       }
     });
 
