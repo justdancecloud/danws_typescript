@@ -133,62 +133,118 @@ client.connect();
 
 ### 3. Session Topic Mode — real-time per-session data with topics
 
-Each session subscribes to **topics** with parameters. The server periodically re-evaluates the data and pushes changes automatically. Only changed values are sent — the client's UI updates in real time with zero extra effort.
+Each session subscribes to **topics** with parameters. The server handles each topic individually — load data, set up live polling, push changes. Each topic has its own scoped payload, so data never collides between topics.
 
 **Server:**
 
 ```typescript
+import { DanWebSocketServer } from "dan-websocket/server";
+
 const server = new DanWebSocketServer({ port: 8080, mode: "session_topic" });
 
-// Re-run onTask every 1 second to detect data changes
-server.topic.addDelayTaskEvent(1000);
-
-server.topic.onTask(async (session, topic) => {
-  // topic.name   — "board.posts", "chart.cpu", etc.
-  // topic.params — { page: 1, size: 20, sort: "date" }
+server.topic.onSubscribe(async (session, topic) => {
 
   if (topic.name === "board.posts") {
+    // Load initial data
     const data = await db.getPosts(topic.params);
     topic.payload.set("items", JSON.stringify(data.items));
     topic.payload.set("totalCount", data.total);
-    // ↑ Only pushes to client when value actually changed
+
+    // Poll every 3 seconds for new posts
+    topic.addDelayTaskEvent(3000, async () => {
+      const fresh = await db.getPosts(topic.params);
+      topic.payload.set("items", JSON.stringify(fresh.items));
+      topic.payload.set("totalCount", fresh.total);
+      // ↑ Only pushes when value actually changed
+    });
   }
 
   if (topic.name === "chart.cpu") {
-    topic.payload.set("value", os.cpuUsage());
-    topic.payload.set("timestamp", new Date());
+    // Real-time CPU chart — poll every 200ms
+    topic.addDelayTaskEvent(200, async () => {
+      topic.payload.set("value", os.cpuUsage());
+      topic.payload.set("timestamp", new Date());
+    });
   }
+
+  if (topic.name === "stock.price") {
+    // Live stock price — poll every 500ms
+    const symbol = topic.params.symbol; // e.g. "AAPL"
+    topic.addDelayTaskEvent(500, async () => {
+      const price = await stockAPI.getPrice(symbol);
+      topic.payload.set("price", price);
+      topic.payload.set("updated", new Date());
+    });
+  }
+
+});
+
+server.topic.onParamsChange(async (session, topic) => {
+
+  if (topic.name === "board.posts") {
+    // User changed page — reload immediately
+    const data = await db.getPosts(topic.params);
+    topic.payload.set("items", JSON.stringify(data.items));
+    topic.payload.set("totalCount", data.total);
+    // Existing poll continues with the new params
+  }
+
+  if (topic.name === "stock.price") {
+    // User switched from AAPL to TSLA
+    const price = await stockAPI.getPrice(topic.params.symbol);
+    topic.payload.set("price", price);
+  }
+
+});
+
+server.topic.onUnsubscribe((session, topic) => {
+  topic.clearDelayedTaskEvent(); // stop polling
+  // topic payload is auto-cleared on the client
 });
 ```
 
 **Client:**
 
 ```typescript
+import { DanWebSocketClient } from "dan-websocket";
+
 const client = new DanWebSocketClient("ws://localhost:8080");
 
-// Subscribe to topics
-client.subscribe("board.posts", { page: 1, size: 20, sort: "date" });
-client.subscribe("chart.cpu");
+client.onReady(() => {
+  // Subscribe to multiple topics — each gets its own data scope
+  client.subscribe("board.posts", { page: 1, size: 20, sort: "date" });
+  client.subscribe("chart.cpu");
+  client.subscribe("stock.price", { symbol: "AAPL" });
+});
 
-// Read topic data
-client.topic("board.posts").get("items");
-client.topic("board.posts").get("totalCount");
-
-// Listen for updates per topic
+// Each topic has isolated data — no key collisions
 client.topic("board.posts").onReceive((key, value) => {
   if (key === "items") renderTable(JSON.parse(value));
   if (key === "totalCount") updatePagination(value);
 });
 
 client.topic("chart.cpu").onReceive((key, value) => {
-  if (key === "value") chart.addPoint(value);
+  if (key === "value") cpuGauge.update(value);
 });
 
-// Change params → server re-runs onTask with new params
-client.setParams("board.posts", { page: 2, size: 20, sort: "date" });
+client.topic("stock.price").onReceive((key, value) => {
+  if (key === "price") priceChart.addPoint(value);
+});
 
-// Unsubscribe → server stops polling, data auto-cleared
-client.unsubscribe("chart.cpu");
+// Change page — server re-runs onParamsChange immediately
+document.getElementById("next-page")!.onclick = () => {
+  client.setParams("board.posts", { page: 2, size: 20, sort: "date" });
+};
+
+// Switch stock — server re-queries with new symbol
+document.getElementById("stock-select")!.onchange = (e) => {
+  client.setParams("stock.price", { symbol: e.target.value });
+};
+
+// Done watching CPU — server stops polling, data cleared
+document.getElementById("close-cpu")!.onclick = () => {
+  client.unsubscribe("chart.cpu");
+};
 
 client.connect();
 ```
@@ -197,22 +253,28 @@ client.connect();
 
 ```
 subscribe("board.posts", {page:1})
-  → onTask runs immediately → payload.set() → data syncs to client
-  → 1s later: onTask re-runs → DB re-query → same data? skip. changed? push.
-  → 1s later: onTask re-runs → new post added? auto-push to client.
-  → ...repeats until unsubscribe
+  → onSubscribe fires → initial data loaded → payload.set() → syncs to client
+  → 3s later: delayed task runs → DB re-query → same data? skip. new post? push.
+  → 3s later: delayed task runs → another check...
+  → (repeats until unsubscribe)
 
 setParams("board.posts", {page:2})
-  → onTask runs immediately with new params → fresh data → push
-  → polling continues with new params
+  → onParamsChange fires → reload with new params → push fresh data
+  → delayed task continues polling with page:2
 
-unsubscribe("board.posts")
-  → polling stops, topic data cleared on client
+subscribe("chart.cpu")
+  → onSubscribe fires → poll starts every 200ms → real-time updates
+
+unsubscribe("chart.cpu")
+  → onUnsubscribe fires → clearDelayedTaskEvent() → polling stops
+  → topic data auto-cleared on client
 ```
 
 ### 4. Session Principal Topic Mode — topics with authentication
 
 Same as `session_topic`, but with principal authentication. The server knows who is requesting what.
+
+**Server:**
 
 ```typescript
 const server = new DanWebSocketServer({ port: 8080, mode: "session_principal_topic" });
@@ -223,76 +285,53 @@ server.onAuthorize(async (uuid, token) => {
   server.authorize(uuid, token, user.name);
 });
 
-server.topic.addDelayTaskEvent(2000);
+server.topic.onSubscribe(async (session, topic) => {
 
-server.topic.onTask(async (session, topic) => {
-  // session.principal = "alice" — know who is asking
   if (topic.name === "my.orders") {
+    // session.principal identifies the authenticated user
     const orders = await db.getOrders(session.principal, topic.params);
     topic.payload.set("items", JSON.stringify(orders.items));
     topic.payload.set("total", orders.total);
+
+    // Poll for new orders every 5 seconds
+    topic.addDelayTaskEvent(5000, async () => {
+      const orders = await db.getOrders(session.principal, topic.params);
+      topic.payload.set("items", JSON.stringify(orders.items));
+      topic.payload.set("total", orders.total);
+    });
   }
+
+  if (topic.name === "my.notifications") {
+    topic.addDelayTaskEvent(2000, async () => {
+      const count = await db.getUnreadCount(session.principal);
+      topic.payload.set("unread", count);
+    });
+  }
+
 });
 ```
 
----
-
-## Real-World Examples
-
-### Real-time CPU monitoring dashboard
+**Client:**
 
 ```typescript
-// Server
-server.topic.addDelayTaskEvent(500);
-server.topic.onTask(async (session, topic) => {
-  topic.payload.set("cpu", os.cpuUsage());
-  topic.payload.set("memory", os.memoryUsage());
-  topic.payload.set("uptime", process.uptime());
+const client = new DanWebSocketClient("ws://localhost:8080");
+
+client.onConnect(() => client.authorize(myJWTToken));
+
+client.onReady(() => {
+  client.subscribe("my.orders", { status: "pending", page: 1 });
+  client.subscribe("my.notifications");
 });
 
-// Client
-client.subscribe("system.monitor");
-client.topic("system.monitor").onReceive((key, value) => {
-  gauges[key].update(value);
-});
-```
-
-### Live stock chart
-
-```typescript
-// Server
-server.topic.addDelayTaskEvent(200);
-server.topic.onTask(async (session, topic) => {
-  const price = await stockAPI.getPrice(topic.params.symbol);
-  topic.payload.set("price", price);
-  topic.payload.set("timestamp", new Date());
+client.topic("my.orders").onReceive((key, value) => {
+  if (key === "items") renderOrders(JSON.parse(value));
 });
 
-// Client
-client.subscribe("stock", { symbol: "AAPL" });
-client.topic("stock").onReceive((key, value) => {
-  if (key === "price") chart.addPoint(value);
-});
-```
-
-### Paginated board with live updates
-
-```typescript
-// Server
-server.topic.addDelayTaskEvent(3000);
-server.topic.onTask(async (session, topic) => {
-  const { page, size } = topic.params;
-  const result = await db.posts.find({ skip: (page-1)*size, limit: size });
-  topic.payload.set("items", JSON.stringify(result.items));
-  topic.payload.set("totalCount", result.total);
+client.topic("my.notifications").onReceive((key, value) => {
+  if (key === "unread") updateBadge(value);
 });
 
-// Client — page change
-document.getElementById("next")!.onclick = () => {
-  currentPage++;
-  client.setParams("posts", { page: currentPage, size: 20 });
-};
-// → Server automatically re-queries with new page, pushes fresh data
+client.connect();
 ```
 
 ---
@@ -337,10 +376,11 @@ const server = new DanWebSocketServer({ port: 8080, mode: "session_principal_top
 
 | Method | Description |
 |--------|-------------|
-| `server.topic.addDelayTaskEvent(ms)` | Set polling interval for onTask |
-| `server.topic.onTask(cb)` | Topic task callback: `(session, topic) => void` |
+| `server.topic.onSubscribe(cb)` | Client subscribed: `(session, topic) => void` |
+| `server.topic.onUnsubscribe(cb)` | Client unsubscribed: `(session, topic) => void` |
+| `server.topic.onParamsChange(cb)` | Client changed params: `(session, topic) => void` |
 
-**`topic` object in onTask callback:**
+**`topic` object in callbacks:**
 
 | Property / Method | Description |
 |-------------------|-------------|
@@ -351,6 +391,8 @@ const server = new DanWebSocketServer({ port: 8080, mode: "session_principal_top
 | `topic.payload.keys` | List keys in this topic's payload |
 | `topic.payload.clear(key)` | Remove one key |
 | `topic.payload.clear()` | Remove all keys in this topic |
+| `topic.addDelayTaskEvent(ms, cb)` | Start periodic polling for this topic |
+| `topic.clearDelayedTaskEvent()` | Stop polling for this topic |
 
 ### Server — Auth & Sessions
 
