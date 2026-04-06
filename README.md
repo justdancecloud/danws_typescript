@@ -1,17 +1,9 @@
 # dan-websocket
 
-> Lightweight binary protocol for real-time state synchronization — **Server to Client**
+> Binary protocol for real-time state sync — **auto-flatten objects, field-level dedup, self-hosted**
 
 [![npm](https://img.shields.io/npm/v/dan-websocket)](https://www.npmjs.com/package/dan-websocket)
 [![Maven Central](https://img.shields.io/maven-central/v/io.github.justdancecloud/dan-websocket)](https://central.sonatype.com/artifact/io.github.justdancecloud/dan-websocket)
-
----
-
-## What is this?
-
-**dan-websocket** pushes state from your server to connected clients in real time. Instead of sending JSON over WebSocket, it uses a compact binary protocol that auto-detects types and handles reconnection, heartbeat, and recovery transparently.
-
-You just `set(key, value)` on the server — even with **objects and arrays**. They auto-flatten into individual binary fields on the wire, so only the fields that actually changed get pushed. Clients access the data as regular JavaScript objects.
 
 ```
 npm install dan-websocket
@@ -21,7 +13,7 @@ Also available in **Java**: [dan-websocket for Java](https://github.com/justdanc
 
 ---
 
-## The Pitch
+## Why dan-websocket?
 
 ```typescript
 // Server — just put objects in
@@ -43,20 +35,28 @@ client.onUpdate((state) => {
 });
 ```
 
-Under the hood, each field is a separate binary key on the wire. When `processes[0].cpu` changes from 12.3 to 15.0, only that 8-byte Float64 gets sent — not the entire object.
+When `processes[0].cpu` changes from 12.3 to 15.0, only that **8-byte Float64** goes over the wire. Not the entire object.
 
 ---
 
-## Why not just JSON over WebSocket?
+## Comparison
 
-| | JSON WebSocket | dan-websocket |
-|---|---|---|
-| A boolean update | `{"key":"alive","value":true}` = 30+ bytes | 11 bytes |
-| Object update | Entire JSON re-sent | Only changed fields |
-| Type safety | Parse then cast | Auto-typed on the wire |
-| Reconnection | DIY | Built-in with exponential backoff |
-| Multi-device sync | DIY per-connection | Principal-based (1 state → N sessions) |
-| Heartbeat / dead detection | DIY | Built-in (10s send, 15s timeout) |
+|  | **dan-websocket** | **Socket.IO** | **Firebase RTDB** | **Ably** |
+|---|---|---|---|---|
+| Protocol | Binary (DanProtocol) | JSON text, Engine.IO + Socket.IO double-wrapped | JSON (internal protocol) | MessagePack / JSON |
+| **bool update** | **~13 bytes** | ~50-70 bytes | ~80-120 bytes | ~60-90 bytes |
+| **100 fields, 1 changed** | **~13 bytes** | **~several KB** (entire object re-sent) | ~100-200 bytes (changed path + subtree) | **~several KB** (entire message re-sent) |
+| Field-level dedup | Yes, automatic. Same key within 100ms batch = last value only | No | Partial (path-level, includes subtree) | No |
+| Auto-flatten | Yes. `set("user", { name, scores: [...] })` auto-expands | No. `JSON.stringify` whole object | Partial. Tree structure but no types | No. Developer serializes |
+| Type auto-detect | 13 types: Bool, Float64, Int64, String, Date, Binary... | No. Everything is JSON string | string, number, boolean only | No. Developer responsibility |
+| Self-hosted | Yes. `npm install`, your server | Yes. `npm install` | No. Google Cloud only | No. SaaS only |
+| Price | **Free (MIT)** | **Free (MIT)** | Free tier, then pay-per-use | $49.99/mo+, $2.50/million msgs |
+| Reconnection | Built-in. Exponential backoff + jitter + state restore | Built-in | Built-in | Built-in |
+| Multi-device sync | Principal-based. 1 user = N sessions, auto-synced | DIY | Path-level listeners | Channel-based, user-level is DIY |
+| Bundle size | ~8 KB (1 dep: `ws`) | ~10.4 KB gzipped | ~90+ KB (Firebase SDK) | ~50+ KB (Ably SDK) |
+| Cross-language | TypeScript + Java (wire-compatible) | Many | Many SDKs | Many SDKs |
+
+The unique combination: **binary + field-level dedup + auto-flatten + self-hosted + free**. No other library has all five.
 
 ---
 
