@@ -453,6 +453,7 @@ export class DanWebSocketServer {
     const session = internal.session;
 
     const newTopics = new Map<string, Record<string, unknown>>();
+    const nameToIndex = new Map<string, number>(); // topicName → client wire index
 
     if (internal.clientRegistry && internal.clientValues) {
       const indexToName = new Map<string, string>();
@@ -464,7 +465,9 @@ export class DanWebSocketServer {
           if (entry) {
             const topicName = internal.clientValues.get(entry.keyId) as string;
             if (topicName) {
+              const idx = parseInt(match[1]);
               indexToName.set(match[1], topicName);
+              nameToIndex.set(topicName, idx);
               if (!newTopics.has(topicName)) newTopics.set(topicName, {});
             }
           }
@@ -510,8 +513,9 @@ export class DanWebSocketServer {
       const existingInfo = session.topic(name);
 
       if (!existingHandle && !existingInfo) {
-        // New subscription — create TopicHandle
-        const handle = session._createTopicHandle(name, params);
+        // New subscription — create TopicHandle with client's wire index
+        const clientIdx = nameToIndex.get(name) ?? session._nextTopicIndex;
+        const handle = session._createTopicHandle(name, params, clientIdx);
         // Fire new API callbacks
         for (const cb of this.topic._onSubscribeCbs) { try { cb(session, handle); } catch {} }
         // Fire backward compat callbacks

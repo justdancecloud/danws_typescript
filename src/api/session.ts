@@ -43,7 +43,7 @@ export class DanWebSocketSession {
 
   // ──── Session-level flat TX store (topic modes backward compat) ────
   private _sessionEntries = new Map<string, KeyEntry>();
-  private _sessionNextKeyId = 1;
+  private _sessionNextKeyId = 50001; // flat session keys start at 50001 to avoid topic payload keyId collision
   private _sessionEnqueue: ((frame: Frame) => void) | null = null;
   private _sessionBound = false;
 
@@ -136,7 +136,7 @@ export class DanWebSocketSession {
     } else {
       if (this._sessionEntries.size > 0) {
         this._sessionEntries.clear();
-        this._sessionNextKeyId = 1;
+        this._sessionNextKeyId = 50001;
         this._triggerSessionResync();
       }
     }
@@ -272,9 +272,12 @@ export class DanWebSocketSession {
     if (t) t.params = params;
   }
 
+  get _nextTopicIndex(): number { return this._topicIndex; }
+
   /** @internal — create a new TopicHandle with scoped payload */
-  _createTopicHandle(name: string, params: Record<string, unknown>): TopicHandle {
-    const index = this._topicIndex++;
+  _createTopicHandle(name: string, params: Record<string, unknown>, wireIndex?: number): TopicHandle {
+    const index = wireIndex ?? this._topicIndex++;
+    if (index >= this._topicIndex) this._topicIndex = index + 1;
     const payload = new TopicPayload(index);
     if (this._sessionEnqueue) {
       payload._bind(this._sessionEnqueue, () => this._triggerSessionResync());
