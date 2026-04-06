@@ -14,7 +14,7 @@
 You just `set(key, value)` on the server. All connected clients receive it instantly.
 
 ```
-npm install dan-websocket          # TypeScript / Node.js
+npm install dan-websocket
 ```
 
 Also available in **Java**: [dan-websocket for Java](https://github.com/justdancecloud/danws_java)
@@ -30,7 +30,6 @@ Also available in **Java**: [dan-websocket for Java](https://github.com/justdanc
 | Reconnection | DIY | Built-in with exponential backoff |
 | Multi-device sync | DIY per-connection | Principal-based (1 state → N sessions) |
 | Heartbeat / dead detection | DIY | Built-in (10s send, 15s timeout) |
-| Key registration | N/A | Server declares keys, client knows what to expect |
 
 ---
 
@@ -50,8 +49,8 @@ Works in **Node.js** (server + client) and **browsers** (client only).
 |------|------|-----------|--------|----------|
 | `broadcast` | No | Shared (all clients) | No | Dashboards, live feeds |
 | `principal` | Yes | Per-principal (shared across devices) | No | Games, per-user data |
-| `session_topic` | No | Per-session | Yes | Public charts, anonymous boards |
-| `session_principal_topic` | Yes | Per-session + principal identity | Yes | Authenticated boards, personalized charts |
+| `session_topic` | No | Per-session per-topic | Yes | Public charts, anonymous boards |
+| `session_principal_topic` | Yes | Per-session per-topic + principal identity | Yes | Authenticated boards, personalized charts |
 
 ---
 
@@ -68,22 +67,14 @@ import { DanWebSocketServer } from "dan-websocket/server";
 
 const server = new DanWebSocketServer({ port: 8080, mode: "broadcast" });
 
-// Just set values. Types are auto-detected. No schema needed.
 server.set("sensor.temp", 23.5);          // number → Float64
 server.set("sensor.status", "online");    // string → String
 server.set("sensor.active", true);        // boolean → Bool
 server.set("sensor.updated", new Date()); // Date → Timestamp
 
-// Update a value — all connected clients get it within 100ms
 setInterval(() => {
   server.set("sensor.temp", 20 + Math.random() * 10);
 }, 1000);
-
-// Read back, list, delete
-server.get("sensor.temp");     // 23.5
-server.keys;                   // ["sensor.temp", "sensor.status", ...]
-server.clear("sensor.active"); // remove one key
-server.clear();                // remove all keys
 ```
 
 **Client:**
@@ -93,13 +84,10 @@ import { DanWebSocketClient } from "dan-websocket";
 
 const client = new DanWebSocketClient("ws://localhost:8080");
 
-// Fires once initial sync is complete
 client.onReady(() => {
   console.log("Temperature:", client.get("sensor.temp"));
-  console.log("All keys:", client.keys);
 });
 
-// Fires on every value update (including initial sync)
 client.onReceive((key, value) => {
   document.getElementById(key)!.textContent = String(value);
 });
@@ -109,125 +97,122 @@ client.connect();
 
 ### 2. Principal Mode — per-user data via principals
 
-Perfect for games, user dashboards, personalized data.
-
 A **principal** = one authenticated user. All their sessions (PC, mobile, other tabs) share the same state automatically.
 
 **Server:**
 
 ```typescript
-import { DanWebSocketServer } from "dan-websocket/server";
-
 const server = new DanWebSocketServer({ port: 8080, mode: "principal" });
 
-// Enable authentication
 server.enableAuthorization(true);
 server.onAuthorize(async (uuid, token) => {
   const user = await verifyJWT(token);
-  server.authorize(uuid, token, user.name);  // 3rd arg = principal name
+  server.authorize(uuid, token, user.name);
 });
 
-// Set data per principal — no schema, just set
 server.principal("alice").set("score", 100);
-server.principal("alice").set("name", "Alice");
-server.principal("alice").set("rank", 1);
-
 server.principal("bob").set("score", 50);
-server.principal("bob").set("name", "Bob");
 
-// Alice opens on PC and mobile → both sessions see score=100
-// Update alice → all her sessions get it instantly
-server.principal("alice").set("score", 200);
+// Alice opens on PC and mobile → both see score=100
+server.principal("alice").set("score", 200); // both devices update instantly
 ```
 
 **Client:**
 
 ```typescript
-import { DanWebSocketClient } from "dan-websocket";
-
 const client = new DanWebSocketClient("ws://localhost:8080");
 
-client.onConnect(() => {
-  client.authorize(myJWTToken);
-});
+client.onConnect(() => client.authorize(myJWTToken));
 
 client.onReady(() => {
-  console.log("My score:", client.get("score"));   // 100 (if alice)
-  console.log("My name:", client.get("name"));     // "Alice"
-});
-
-client.onReceive((key, value) => {
-  if (key === "score") updateScoreUI(value);
+  console.log("My score:", client.get("score"));
 });
 
 client.connect();
 ```
 
-### 3. Session Topic Mode — per-session data driven by client topics
+### 3. Session Topic Mode — real-time per-session data with topics
 
-Perfect for charts, paginated boards, filtered data. Each session subscribes to topics with parameters, and the server pushes data tailored to each session.
+Each session subscribes to **topics** with parameters. The server periodically re-evaluates the data and pushes changes automatically. Only changed values are sent — the client's UI updates in real time with zero extra effort.
 
 **Server:**
 
 ```typescript
-import { DanWebSocketServer } from "dan-websocket/server";
-
 const server = new DanWebSocketServer({ port: 8080, mode: "session_topic" });
 
-server.onTopicSubscribe(async (session, topic) => {
-  // topic.name = "board.posts"
-  // topic.params = { page: 1, size: 20, sort: "date" }
-  const data = await db.getPosts(topic.params);
-  session.set("posts", data.items);         // push to THIS session only
-  session.set("totalCount", data.total);
-});
+// Re-run onTask every 1 second to detect data changes
+server.topic.addDelayTaskEvent(1000);
 
-server.onTopicParamsChange(async (session, topic) => {
-  // Client changed params (e.g. page: 2)
-  const data = await db.getPosts(topic.params);
-  session.set("posts", data.items);
-});
+server.topic.onTask(async (session, topic) => {
+  // topic.name   — "board.posts", "chart.cpu", etc.
+  // topic.params — { page: 1, size: 20, sort: "date" }
 
-server.onTopicUnsubscribe((session, topicName) => {
-  session.clearKey("posts");
-  session.clearKey("totalCount");
+  if (topic.name === "board.posts") {
+    const data = await db.getPosts(topic.params);
+    topic.payload.set("items", JSON.stringify(data.items));
+    topic.payload.set("totalCount", data.total);
+    // ↑ Only pushes to client when value actually changed
+  }
+
+  if (topic.name === "chart.cpu") {
+    topic.payload.set("value", os.cpuUsage());
+    topic.payload.set("timestamp", new Date());
+  }
 });
 ```
 
 **Client:**
 
 ```typescript
-import { DanWebSocketClient } from "dan-websocket";
-
 const client = new DanWebSocketClient("ws://localhost:8080");
 
-client.onReady(() => {
-  // Subscribe to topics after connected
-  client.subscribe("board.posts", { page: 1, size: 20, sort: "date" });
-  client.subscribe("chart.sales", { range: "7d", groupBy: "day" });
-});
+// Subscribe to topics
+client.subscribe("board.posts", { page: 1, size: 20, sort: "date" });
+client.subscribe("chart.cpu");
 
-client.onReceive((key, value) => {
-  if (key === "posts") renderTable(value);
+// Read topic data
+client.topic("board.posts").get("items");
+client.topic("board.posts").get("totalCount");
+
+// Listen for updates per topic
+client.topic("board.posts").onReceive((key, value) => {
+  if (key === "items") renderTable(JSON.parse(value));
   if (key === "totalCount") updatePagination(value);
 });
 
-// Change page — server gets onTopicParamsChange
-document.getElementById("next")!.onclick = () => {
-  client.setParams("board.posts", { page: 2, size: 20, sort: "date" });
-};
+client.topic("chart.cpu").onReceive((key, value) => {
+  if (key === "value") chart.addPoint(value);
+});
 
-// Stop watching sales chart
-client.unsubscribe("chart.sales");
+// Change params → server re-runs onTask with new params
+client.setParams("board.posts", { page: 2, size: 20, sort: "date" });
+
+// Unsubscribe → server stops polling, data auto-cleared
+client.unsubscribe("chart.cpu");
 
 client.connect();
+```
+
+**What happens under the hood:**
+
+```
+subscribe("board.posts", {page:1})
+  → onTask runs immediately → payload.set() → data syncs to client
+  → 1s later: onTask re-runs → DB re-query → same data? skip. changed? push.
+  → 1s later: onTask re-runs → new post added? auto-push to client.
+  → ...repeats until unsubscribe
+
+setParams("board.posts", {page:2})
+  → onTask runs immediately with new params → fresh data → push
+  → polling continues with new params
+
+unsubscribe("board.posts")
+  → polling stops, topic data cleared on client
 ```
 
 ### 4. Session Principal Topic Mode — topics with authentication
 
-Same as `session_topic`, but with principal authentication. The server can identify who is requesting what.
-
-**Server:**
+Same as `session_topic`, but with principal authentication. The server knows who is requesting what.
 
 ```typescript
 const server = new DanWebSocketServer({ port: 8080, mode: "session_principal_topic" });
@@ -238,51 +223,76 @@ server.onAuthorize(async (uuid, token) => {
   server.authorize(uuid, token, user.name);
 });
 
-server.onTopicSubscribe(async (session, topic) => {
+server.topic.addDelayTaskEvent(2000);
+
+server.topic.onTask(async (session, topic) => {
   // session.principal = "alice" — know who is asking
-  const data = await db.getUserPosts(session.principal, topic.params);
-  session.set("posts", data.items);
+  if (topic.name === "my.orders") {
+    const orders = await db.getOrders(session.principal, topic.params);
+    topic.payload.set("items", JSON.stringify(orders.items));
+    topic.payload.set("total", orders.total);
+  }
 });
 ```
 
 ---
 
-## Architecture
+## Real-World Examples
 
+### Real-time CPU monitoring dashboard
+
+```typescript
+// Server
+server.topic.addDelayTaskEvent(500);
+server.topic.onTask(async (session, topic) => {
+  topic.payload.set("cpu", os.cpuUsage());
+  topic.payload.set("memory", os.memoryUsage());
+  topic.payload.set("uptime", process.uptime());
+});
+
+// Client
+client.subscribe("system.monitor");
+client.topic("system.monitor").onReceive((key, value) => {
+  gauges[key].update(value);
+});
 ```
-┌─────────────────────────────────────────────────────┐
-│                     SERVER                          │
-│                                                     │
-│  Broadcast Mode:                                    │
-│    server.set("temp", 23.5) ──▶ All clients         │
-│                                                     │
-│  Principal Mode:                                    │
-│    Principal "alice" ─── Shared State (1 copy)      │
-│      ├── Session (PC browser)  ── same data         │
-│      ├── Session (mobile app)  ── same data         │
-│      └── Session (tablet)      ── same data         │
-│                                                     │
-│  Topic Modes (session_topic / session_principal_topic): │
-│    Session 1 ── subscribe("posts", {page:1})        │
-│      └── session.set("posts", [...page 1 data])    │
-│    Session 2 ── subscribe("posts", {page:2})        │
-│      └── session.set("posts", [...page 2 data])    │
-└──────────────────────┬──────────────────────────────┘
-                       │ Binary WebSocket (DanProtocol v3.0)
-                       ▼
-┌─────────────────────────────────────────────────────┐
-│                     CLIENT                          │
-│                                                     │
-│  client.get("temp")  → 23.5                         │
-│  client.onReceive((key, val) => ...)                │
-│  client.keys         → ["temp", "status", ...]      │
-│                                                     │
-│  client.subscribe("posts", {page: 1, size: 20})    │
-│  client.setParams("posts", {page: 2, size: 20})    │
-│  client.unsubscribe("posts")                        │
-│                                                     │
-│  Auto: reconnection, heartbeat, recovery            │
-└─────────────────────────────────────────────────────┘
+
+### Live stock chart
+
+```typescript
+// Server
+server.topic.addDelayTaskEvent(200);
+server.topic.onTask(async (session, topic) => {
+  const price = await stockAPI.getPrice(topic.params.symbol);
+  topic.payload.set("price", price);
+  topic.payload.set("timestamp", new Date());
+});
+
+// Client
+client.subscribe("stock", { symbol: "AAPL" });
+client.topic("stock").onReceive((key, value) => {
+  if (key === "price") chart.addPoint(value);
+});
+```
+
+### Paginated board with live updates
+
+```typescript
+// Server
+server.topic.addDelayTaskEvent(3000);
+server.topic.onTask(async (session, topic) => {
+  const { page, size } = topic.params;
+  const result = await db.posts.find({ skip: (page-1)*size, limit: size });
+  topic.payload.set("items", JSON.stringify(result.items));
+  topic.payload.set("totalCount", result.total);
+});
+
+// Client — page change
+document.getElementById("next")!.onclick = () => {
+  currentPage++;
+  client.setParams("posts", { page: currentPage, size: 20 });
+};
+// → Server automatically re-queries with new page, pushes fresh data
 ```
 
 ---
@@ -325,24 +335,22 @@ const server = new DanWebSocketServer({ port: 8080, mode: "session_topic" });
 const server = new DanWebSocketServer({ port: 8080, mode: "session_principal_topic" });
 ```
 
-| Event | Callback |
-|-------|----------|
-| `server.onTopicSubscribe(cb)` | Client subscribed: `(session, topic)` |
-| `server.onTopicUnsubscribe(cb)` | Client unsubscribed: `(session, topicName)` |
-| `server.onTopicParamsChange(cb)` | Client changed params: `(session, topic)` |
-
-**Session (in topic modes):**
-
 | Method | Description |
 |--------|-------------|
-| `session.set(key, value)` | Push data to this session only |
-| `session.get(key)` | Read current value |
-| `session.keys` | List keys |
-| `session.clearKey(key)` | Remove one key |
-| `session.clearKey()` | Remove all keys |
-| `session.topics` | List subscribed topic names |
-| `session.topic(name)` | Get topic info: `{ name, params }` |
-| `session.principal` | Principal name (session_principal_topic only) |
+| `server.topic.addDelayTaskEvent(ms)` | Set polling interval for onTask |
+| `server.topic.onTask(cb)` | Topic task callback: `(session, topic) => void` |
+
+**`topic` object in onTask callback:**
+
+| Property / Method | Description |
+|-------------------|-------------|
+| `topic.name` | Topic name (e.g. `"board.posts"`) |
+| `topic.params` | Client-provided params `{ page: 1, size: 20 }` |
+| `topic.payload.set(key, value)` | Set data scoped to this topic (auto-pushes on change) |
+| `topic.payload.get(key)` | Read current value |
+| `topic.payload.keys` | List keys in this topic's payload |
+| `topic.payload.clear(key)` | Remove one key |
+| `topic.payload.clear()` | Remove all keys in this topic |
 
 ### Server — Auth & Sessions
 
@@ -370,7 +378,7 @@ const client = new DanWebSocketClient(url, options?);
 | `client.connect()` | Connect to server |
 | `client.disconnect()` | Disconnect (no auto-reconnect) |
 | `client.authorize(token)` | Send auth token |
-| `client.get(key)` | Current value (`undefined` if not received) |
+| `client.get(key)` | Current value — broadcast/principal modes |
 | `client.keys` | All received key paths |
 | `client.id` | This client's UUIDv7 (stable across reconnects) |
 | `client.state` | Connection state string |
@@ -383,12 +391,15 @@ const client = new DanWebSocketClient(url, options?);
 | `client.unsubscribe(name)` | Unsubscribe from a topic |
 | `client.setParams(name, params)` | Update params for an existing topic |
 | `client.topics` | List subscribed topic names |
+| `client.topic(name).get(key)` | Get value within topic's payload |
+| `client.topic(name).keys` | List keys in topic's payload |
+| `client.topic(name).onReceive(cb)` | Listen for updates: `(key, value) => void` |
 
 | Event | Callback |
 |-------|----------|
 | `client.onConnect(cb)` | WebSocket opened |
-| `client.onReady(cb)` | Initial sync complete, `get()` works |
-| `client.onReceive(cb)` | Value update: `(key, value)` |
+| `client.onReady(cb)` | Initial sync complete |
+| `client.onReceive(cb)` | Value update: `(key, value)` — broadcast/principal modes |
 | `client.onDisconnect(cb)` | Connection lost |
 | `client.onReconnecting(cb)` | Retry attempt: `(attempt, delayMs)` |
 | `client.onReconnect(cb)` | Reconnected and re-synced |
