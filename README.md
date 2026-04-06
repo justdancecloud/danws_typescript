@@ -3,6 +3,7 @@
 > Lightweight binary protocol for real-time state synchronization — **Server to Client**
 
 [![npm](https://img.shields.io/npm/v/dan-websocket)](https://www.npmjs.com/package/dan-websocket)
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.justdancecloud/dan-websocket)](https://central.sonatype.com/artifact/io.github.justdancecloud/dan-websocket)
 
 ---
 
@@ -11,6 +12,12 @@
 **dan-websocket** pushes state from your server to connected clients in real time. Instead of sending JSON over WebSocket, it uses a compact binary protocol ([DanProtocol v3.0](./dan-protocol-3.0.md)) that auto-detects types and handles reconnection, heartbeat, and recovery transparently.
 
 You just `set(key, value)` on the server. All connected clients receive it instantly.
+
+```
+npm install dan-websocket          # TypeScript / Node.js
+```
+
+Also available in **Java**: [dan-websocket for Java](https://github.com/justdancecloud/danws_java)
 
 ---
 
@@ -273,7 +280,7 @@ new DanWebSocketClient(url, {
     baseDelay: 1000,         // ms
     maxDelay: 30000,         // ms
     backoffMultiplier: 2,
-    jitter: true,            // ±50% randomization
+    jitter: true,            // +/-50% randomization
   }
 });
 ```
@@ -287,7 +294,7 @@ new DanWebSocketClient(url, {
 | `null` | Null | 0 bytes |
 | `true` / `false` | Bool | 1 byte |
 | `42`, `3.14` | Float64 | 8 bytes |
-| `123n` (bigint ≥ 0) | Uint64 | 8 bytes |
+| `123n` (bigint >= 0) | Uint64 | 8 bytes |
 | `-5n` (bigint < 0) | Int64 | 8 bytes |
 | `"hello"` | String | variable |
 | `new Uint8Array([...])` | Binary | variable |
@@ -295,11 +302,22 @@ new DanWebSocketClient(url, {
 
 ---
 
+## Cross-Language Support
+
+dan-websocket is available in two languages with identical APIs and wire-compatible binary protocol:
+
+| Language | Package | Install |
+|----------|---------|---------|
+| **TypeScript** | [`dan-websocket`](https://www.npmjs.com/package/dan-websocket) | `npm install dan-websocket` |
+| **Java** | [`io.github.justdancecloud:dan-websocket`](https://central.sonatype.com/artifact/io.github.justdancecloud/dan-websocket) | Gradle / Maven |
+
+A TypeScript server can serve Java clients and vice versa.
+
+---
+
 ## Protocol
 
 See [dan-protocol-3.0.md](./dan-protocol-3.0.md) for the full binary protocol specification.
-
-Wire-compatible with the [Java implementation](https://github.com/justdancecloud/danws_java).
 
 ---
 
