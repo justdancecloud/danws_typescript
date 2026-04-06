@@ -3,6 +3,7 @@ import { DataType, FrameType, DanWSError } from "../protocol/types.js";
 import type { Frame } from "../protocol/types.js";
 import { encode } from "../protocol/codec.js";
 import { createStreamParser } from "../protocol/stream-parser.js";
+import { detectDataType } from "../protocol/auto-type.js";
 import { AuthController } from "../state/auth-controller.js";
 import { KeyRegistry } from "../state/key-registry.js";
 import { StateStore } from "../state/state-store.js";
@@ -54,6 +55,10 @@ export class DanWebSocketClient {
   private _registry = new KeyRegistry();
   private _store = new StateStore();
   private _inboundRecovery = new RecoveryController();
+
+  // Topic state (client→server)
+  private _subscriptions = new Map<string, Record<string, unknown>>(); // topicName → params
+  private _topicDirty = false;
 
   // Connection layers
   private _bulkQueue = new BulkQueue();
@@ -123,6 +128,29 @@ export class DanWebSocketClient {
     const frame = AuthController.buildAuthFrame(token);
     this._sendFrame(frame);
     this._state = "authorizing";
+  }
+
+  // ──── Topic API ────
+
+  subscribe(topicName: string, params: Record<string, unknown> = {}): void {
+    this._subscriptions.set(topicName, params);
+    this._sendTopicSync();
+  }
+
+  unsubscribe(topicName: string): void {
+    if (this._subscriptions.delete(topicName)) {
+      this._sendTopicSync();
+    }
+  }
+
+  setParams(topicName: string, params: Record<string, unknown>): void {
+    if (!this._subscriptions.has(topicName)) return;
+    this._subscriptions.set(topicName, params);
+    this._sendTopicSync();
+  }
+
+  get topics(): string[] {
+    return Array.from(this._subscriptions.keys());
   }
 
   // ──── Event registration ────
@@ -226,7 +254,8 @@ export class DanWebSocketClient {
       }
 
       case FrameType.ServerSync: {
-        if (this._state === "identifying") {
+        const wasIdentifying = this._state === "identifying";
+        if (wasIdentifying) {
           this._state = "synchronizing";
         }
         // Send Client READY
@@ -235,6 +264,20 @@ export class DanWebSocketClient {
           keyId: 0, dataType: DataType.Null, payload: null,
         };
         this._bulkQueue.enqueue(readyFrame);
+
+        // If no keys were registered before SYNC, server has no data → go ready immediately
+        if (this._registry.size === 0) {
+          this._state = "ready";
+          this._inboundRecovery.complete();
+          this._emit(this._onReady);
+          if (this._reconnectEngine.isActive) {
+            this._reconnectEngine.stop();
+            this._emit(this._onReconnect);
+          }
+          if (this._subscriptions.size > 0) {
+            this._sendTopicSync();
+          }
+        }
         break;
       }
 
@@ -263,9 +306,17 @@ export class DanWebSocketClient {
             this._reconnectEngine.stop();
             this._emit(this._onReconnect);
           }
+          // Resend topic subscriptions after (re)connect
+          if (this._subscriptions.size > 0) {
+            this._sendTopicSync();
+          }
         }
         break;
       }
+
+      case FrameType.ServerReady:
+        // Server acknowledged our topic sync — no action needed
+        break;
 
       case FrameType.ServerReset:
         this._registry.clear();
@@ -277,6 +328,65 @@ export class DanWebSocketClient {
         this._emitError(new DanWSError("REMOTE_ERROR", String(frame.payload)));
         break;
     }
+  }
+
+  private _sendTopicSync(): void {
+    if (!this._ws || this._ws.readyState !== 1) {
+      this._topicDirty = true;
+      return;
+    }
+
+    // Build flat key-value list from subscriptions using index-based keys:
+    // "topic.<idx>.name" = topicName (String)
+    // "topic.<idx>.param.<paramKey>" = value
+    const entries: Array<{ path: string; value: unknown }> = [];
+    let idx = 0;
+    for (const [topicName, params] of this._subscriptions) {
+      entries.push({ path: `topic.${idx}.name`, value: topicName });
+      for (const [paramKey, paramValue] of Object.entries(params)) {
+        entries.push({ path: `topic.${idx}.param.${paramKey}`, value: paramValue });
+      }
+      idx++;
+    }
+
+    // Send ClientReset
+    this._sendFrame({
+      frameType: FrameType.ClientReset,
+      keyId: 0, dataType: DataType.Null, payload: null,
+    });
+
+    // Send ClientKeyRegistration for each entry
+    let keyId = 1;
+    const keyIds: Array<{ id: number; value: unknown; dataType: DataType }> = [];
+    for (const entry of entries) {
+      const dt = detectDataType(entry.value);
+      this._sendFrame({
+        frameType: FrameType.ClientKeyRegistration,
+        keyId,
+        dataType: dt,
+        payload: entry.path,
+      });
+      keyIds.push({ id: keyId, value: entry.value, dataType: dt });
+      keyId++;
+    }
+
+    // Send ClientValue for each entry (BEFORE sync!)
+    for (const entry of keyIds) {
+      this._sendFrame({
+        frameType: FrameType.ClientValue,
+        keyId: entry.id,
+        dataType: entry.dataType,
+        payload: entry.value,
+      });
+    }
+
+    // Send ClientSync (signals: all keys + values sent)
+    this._sendFrame({
+      frameType: FrameType.ClientSync,
+      keyId: 0, dataType: DataType.Null, payload: null,
+    });
+
+    this._topicDirty = false;
   }
 
   private _sendFrame(frame: Frame): void {

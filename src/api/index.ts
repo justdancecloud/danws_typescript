@@ -1,7 +1,7 @@
 export { DanWebSocketClient } from "./client.js";
 export type { ClientState, ClientOptions } from "./client.js";
 export { DanWebSocketServer } from "./server.js";
-export type { ServerOptions } from "./server.js";
+export type { ServerOptions, ServerMode } from "./server.js";
 export { DanWebSocketSession } from "./session.js";
-export type { SessionState } from "./session.js";
+export type { SessionState, TopicInfo } from "./session.js";
 export { PrincipalTX, PrincipalManager } from "./principal-store.js";

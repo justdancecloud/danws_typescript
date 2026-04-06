@@ -44,6 +44,17 @@ Works in **Node.js** (server + client) and **browsers** (client only).
 
 ---
 
+## 4 Modes
+
+| Mode | Auth | Data Scope | Topics | Use Case |
+|------|------|-----------|--------|----------|
+| `broadcast` | No | Shared (all clients) | No | Dashboards, live feeds |
+| `principal` | Yes | Per-principal (shared across devices) | No | Games, per-user data |
+| `session_topic` | No | Per-session | Yes | Public charts, anonymous boards |
+| `session_principal_topic` | Yes | Per-session + principal identity | Yes | Authenticated boards, personalized charts |
+
+---
+
 ## Quick Start
 
 ### 1. Broadcast Mode — all clients get the same data
@@ -96,7 +107,7 @@ client.onReceive((key, value) => {
 client.connect();
 ```
 
-### 2. Individual Mode — per-user data via principals
+### 2. Principal Mode — per-user data via principals
 
 Perfect for games, user dashboards, personalized data.
 
@@ -107,7 +118,7 @@ A **principal** = one authenticated user. All their sessions (PC, mobile, other 
 ```typescript
 import { DanWebSocketServer } from "dan-websocket/server";
 
-const server = new DanWebSocketServer({ port: 8080, mode: "individual" });
+const server = new DanWebSocketServer({ port: 8080, mode: "principal" });
 
 // Enable authentication
 server.enableAuthorization(true);
@@ -125,7 +136,6 @@ server.principal("bob").set("score", 50);
 server.principal("bob").set("name", "Bob");
 
 // Alice opens on PC and mobile → both sessions see score=100
-// Bob's sessions see score=50
 // Update alice → all her sessions get it instantly
 server.principal("alice").set("score", 200);
 ```
@@ -137,7 +147,6 @@ import { DanWebSocketClient } from "dan-websocket";
 
 const client = new DanWebSocketClient("ws://localhost:8080");
 
-// Authenticate after connecting
 client.onConnect(() => {
   client.authorize(myJWTToken);
 });
@@ -151,16 +160,89 @@ client.onReceive((key, value) => {
   if (key === "score") updateScoreUI(value);
 });
 
-// Auto-reconnection is built-in
-client.onReconnecting((attempt, delay) => {
-  showStatus(`Reconnecting... attempt ${attempt}`);
+client.connect();
+```
+
+### 3. Session Topic Mode — per-session data driven by client topics
+
+Perfect for charts, paginated boards, filtered data. Each session subscribes to topics with parameters, and the server pushes data tailored to each session.
+
+**Server:**
+
+```typescript
+import { DanWebSocketServer } from "dan-websocket/server";
+
+const server = new DanWebSocketServer({ port: 8080, mode: "session_topic" });
+
+server.onTopicSubscribe(async (session, topic) => {
+  // topic.name = "board.posts"
+  // topic.params = { page: 1, size: 20, sort: "date" }
+  const data = await db.getPosts(topic.params);
+  session.set("posts", data.items);         // push to THIS session only
+  session.set("totalCount", data.total);
 });
 
-client.onReconnect(() => {
-  showStatus("Connected");
+server.onTopicParamsChange(async (session, topic) => {
+  // Client changed params (e.g. page: 2)
+  const data = await db.getPosts(topic.params);
+  session.set("posts", data.items);
 });
+
+server.onTopicUnsubscribe((session, topicName) => {
+  session.clearKey("posts");
+  session.clearKey("totalCount");
+});
+```
+
+**Client:**
+
+```typescript
+import { DanWebSocketClient } from "dan-websocket";
+
+const client = new DanWebSocketClient("ws://localhost:8080");
+
+client.onReady(() => {
+  // Subscribe to topics after connected
+  client.subscribe("board.posts", { page: 1, size: 20, sort: "date" });
+  client.subscribe("chart.sales", { range: "7d", groupBy: "day" });
+});
+
+client.onReceive((key, value) => {
+  if (key === "posts") renderTable(value);
+  if (key === "totalCount") updatePagination(value);
+});
+
+// Change page — server gets onTopicParamsChange
+document.getElementById("next")!.onclick = () => {
+  client.setParams("board.posts", { page: 2, size: 20, sort: "date" });
+};
+
+// Stop watching sales chart
+client.unsubscribe("chart.sales");
 
 client.connect();
+```
+
+### 4. Session Principal Topic Mode — topics with authentication
+
+Same as `session_topic`, but with principal authentication. The server can identify who is requesting what.
+
+**Server:**
+
+```typescript
+const server = new DanWebSocketServer({ port: 8080, mode: "session_principal_topic" });
+
+server.enableAuthorization(true);
+server.onAuthorize(async (uuid, token) => {
+  const user = await verifyJWT(token);
+  server.authorize(uuid, token, user.name);
+});
+
+server.onTopicSubscribe(async (session, topic) => {
+  // session.principal = "alice" — know who is asking
+  const data = await db.getUserPosts(session.principal, topic.params);
+  session.set("posts", data.items);
+});
 ```
 
 ---
@@ -174,14 +256,17 @@ client.connect();
 │  Broadcast Mode:                                    │
 │    server.set("temp", 23.5) ──▶ All clients         │
 │                                                     │
-│  Individual Mode:                                   │
+│  Principal Mode:                                    │
 │    Principal "alice" ─── Shared State (1 copy)      │
 │      ├── Session (PC browser)  ── same data         │
 │      ├── Session (mobile app)  ── same data         │
 │      └── Session (tablet)      ── same data         │
 │                                                     │
-│    Principal "bob" ─── Shared State (1 copy)        │
-│      └── Session (laptop)      ── own data          │
+│  Topic Modes (session_topic / session_principal_topic): │
+│    Session 1 ── subscribe("posts", {page:1})        │
+│      └── session.set("posts", [...page 1 data])    │
+│    Session 2 ── subscribe("posts", {page:2})        │
+│      └── session.set("posts", [...page 2 data])    │
 └──────────────────────┬──────────────────────────────┘
                        │ Binary WebSocket (DanProtocol v3.0)
                        ▼
@@ -191,6 +276,10 @@ client.connect();
 │  client.get("temp")  → 23.5                         │
 │  client.onReceive((key, val) => ...)                │
 │  client.keys         → ["temp", "status", ...]      │
+│                                                     │
+│  client.subscribe("posts", {page: 1, size: 20})    │
+│  client.setParams("posts", {page: 2, size: 20})    │
+│  client.unsubscribe("posts")                        │
 │                                                     │
 │  Auto: reconnection, heartbeat, recovery            │
 └─────────────────────────────────────────────────────┘
@@ -214,10 +303,10 @@ const server = new DanWebSocketServer({ port: 8080, mode: "broadcast" });
 | `server.clear(key)` | Remove one key |
 | `server.clear()` | Remove all keys |
 
-### Server — Individual Mode
+### Server — Principal Mode
 
 ```typescript
-const server = new DanWebSocketServer({ port: 8080, mode: "individual" });
+const server = new DanWebSocketServer({ port: 8080, mode: "principal" });
 ```
 
 | Method | Description |
@@ -227,6 +316,33 @@ const server = new DanWebSocketServer({ port: 8080, mode: "individual" });
 | `server.principal(name).keys` | List keys |
 | `server.principal(name).clear(key)` | Remove one key |
 | `server.principal(name).clear()` | Remove all keys |
+
+### Server — Topic Modes
+
+```typescript
+const server = new DanWebSocketServer({ port: 8080, mode: "session_topic" });
+// or
+const server = new DanWebSocketServer({ port: 8080, mode: "session_principal_topic" });
+```
+
+| Event | Callback |
+|-------|----------|
+| `server.onTopicSubscribe(cb)` | Client subscribed: `(session, topic)` |
+| `server.onTopicUnsubscribe(cb)` | Client unsubscribed: `(session, topicName)` |
+| `server.onTopicParamsChange(cb)` | Client changed params: `(session, topic)` |
+
+**Session (in topic modes):**
+
+| Method | Description |
+|--------|-------------|
+| `session.set(key, value)` | Push data to this session only |
+| `session.get(key)` | Read current value |
+| `session.keys` | List keys |
+| `session.clearKey(key)` | Remove one key |
+| `session.clearKey()` | Remove all keys |
+| `session.topics` | List subscribed topic names |
+| `session.topic(name)` | Get topic info: `{ name, params }` |
+| `session.principal` | Principal name (session_principal_topic only) |
 
 ### Server — Auth & Sessions
 
@@ -258,6 +374,15 @@ const client = new DanWebSocketClient(url, options?);
 | `client.keys` | All received key paths |
 | `client.id` | This client's UUIDv7 (stable across reconnects) |
 | `client.state` | Connection state string |
+
+**Topic methods (topic modes):**
+
+| Method | Description |
+|--------|-------------|
+| `client.subscribe(name, params?)` | Subscribe to a topic with optional params |
+| `client.unsubscribe(name)` | Unsubscribe from a topic |
+| `client.setParams(name, params)` | Update params for an existing topic |
+| `client.topics` | List subscribed topic names |
 
 | Event | Callback |
 |-------|----------|

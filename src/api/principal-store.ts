@@ -164,6 +164,7 @@ export class PrincipalTX {
  */
 export class PrincipalManager {
   private _principals = new Map<string, PrincipalTX>();
+  private _sessionCounts = new Map<string, number>(); // principal → active session count
   private _onNewPrincipal: ((ptx: PrincipalTX) => void) | null = null;
 
   /** @internal */
@@ -183,6 +184,15 @@ export class PrincipalManager {
     return ptx;
   }
 
+  /** List all principals that have at least one active session */
+  get principals(): string[] {
+    const result: string[] = [];
+    for (const [name, count] of this._sessionCounts) {
+      if (count > 0) result.push(name);
+    }
+    return result;
+  }
+
   has(name: string): boolean {
     return this._principals.has(name);
   }
@@ -193,9 +203,28 @@ export class PrincipalManager {
 
   delete(name: string): void {
     this._principals.delete(name);
+    this._sessionCounts.delete(name);
   }
 
   clear(): void {
     this._principals.clear();
+    this._sessionCounts.clear();
+  }
+
+  /** @internal — track session attach/detach for principal lifecycle */
+  _addSession(principal: string): void {
+    this._sessionCounts.set(principal, (this._sessionCounts.get(principal) ?? 0) + 1);
+  }
+
+  /** @internal — returns true if principal has no more sessions (should be cleaned up) */
+  _removeSession(principal: string): boolean {
+    const count = (this._sessionCounts.get(principal) ?? 1) - 1;
+    if (count <= 0) {
+      this._sessionCounts.delete(principal);
+      this._principals.delete(principal);
+      return true;
+    }
+    this._sessionCounts.set(principal, count);
+    return false;
   }
 }

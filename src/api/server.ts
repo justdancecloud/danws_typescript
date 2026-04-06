@@ -9,12 +9,16 @@ import { BulkQueue } from "../connection/bulk-queue.js";
 import { HeartbeatManager } from "../connection/heartbeat-manager.js";
 import { DanWebSocketSession } from "./session.js";
 import { PrincipalManager, PrincipalTX } from "./principal-store.js";
+import type { TopicInfo } from "./session.js";
+import { KeyRegistry } from "../state/key-registry.js";
+
+export type ServerMode = "broadcast" | "principal" | "individual" | "session_topic" | "session_principal_topic";
 
 export interface ServerOptions {
   port?: number;
   server?: HttpServer;
   path?: string;
-  mode?: "broadcast" | "individual";
+  mode?: ServerMode;
   session?: { ttl?: number };
 }
 
@@ -25,12 +29,14 @@ interface InternalSession {
   heartbeat: HeartbeatManager;
   authController: AuthController;
   ttlTimer: ReturnType<typeof setTimeout> | null;
+  clientRegistry: KeyRegistry | null;
+  clientValues: Map<number, unknown> | null;
 }
 
 const BROADCAST_PRINCIPAL = "__broadcast__";
 
 export class DanWebSocketServer {
-  readonly mode: "broadcast" | "individual";
+  readonly mode: ServerMode;
 
   private _principals: PrincipalManager;
   private _wss: WSServer;
@@ -39,7 +45,6 @@ export class DanWebSocketServer {
   private _authEnabled = false;
   private _authTimeout = 5000;
 
-  // Sessions
   private _sessions = new Map<string, InternalSession>();
   private _tmpSessions = new Map<string, InternalSession>();
 
@@ -47,6 +52,9 @@ export class DanWebSocketServer {
   private _onConnection: Array<(session: DanWebSocketSession) => void> = [];
   private _onAuthorize: Array<(clientUuid: string, token: string) => void> = [];
   private _onSessionExpired: Array<(session: DanWebSocketSession) => void> = [];
+  private _onTopicSubscribe: Array<(session: DanWebSocketSession, topic: TopicInfo) => void> = [];
+  private _onTopicUnsubscribe: Array<(session: DanWebSocketSession, topicName: string) => void> = [];
+  private _onTopicParamsChange: Array<(session: DanWebSocketSession, topic: TopicInfo) => void> = [];
 
   constructor(options: ServerOptions) {
     if (options.port != null && options.server != null) {
@@ -56,12 +64,18 @@ export class DanWebSocketServer {
       throw new DanWSError("INVALID_OPTIONS", "Must specify either port or server");
     }
 
-    this.mode = options.mode ?? "individual";
+    // "individual" is alias for "principal"
+    let mode = options.mode ?? "principal";
+    if (mode === "individual") mode = "principal";
+    this.mode = mode;
+
     this._path = options.path ?? "/";
     this._ttl = options.session?.ttl ?? 600_000;
 
     this._principals = new PrincipalManager();
-    this._principals._setOnNewPrincipal((ptx) => this._bindPrincipalTX(ptx));
+    if (!this._isTopicMode) {
+      this._principals._setOnNewPrincipal((ptx) => this._bindPrincipalTX(ptx));
+    }
 
     if (options.port != null) {
       this._wss = new WSServer({ port: options.port, path: this._path });
@@ -72,15 +86,23 @@ export class DanWebSocketServer {
     this._wss.on("connection", (ws) => this._handleConnection(ws));
   }
 
-  // ──── Broadcast mode API (server.set / server.get / server.keys / server.clear) ────
+  private get _isTopicMode(): boolean {
+    return this.mode === "session_topic" || this.mode === "session_principal_topic";
+  }
+
+  private get _needsAuth(): boolean {
+    return this.mode === "principal" || this.mode === "session_principal_topic";
+  }
+
+  // ──── Broadcast mode API ────
 
   set(key: string, value: unknown): void {
-    this._assertBroadcast("set");
+    this._assertMode("broadcast", "set");
     this._principals.principal(BROADCAST_PRINCIPAL).set(key, value);
   }
 
   get(key: string): unknown {
-    this._assertBroadcast("get");
+    this._assertMode("broadcast", "get");
     return this._principals.principal(BROADCAST_PRINCIPAL).get(key);
   }
 
@@ -92,7 +114,7 @@ export class DanWebSocketServer {
   clear(key: string): void;
   clear(): void;
   clear(key?: string): void {
-    this._assertBroadcast("clear");
+    this._assertMode("broadcast", "clear");
     if (key !== undefined) {
       this._principals.principal(BROADCAST_PRINCIPAL).clear(key);
     } else {
@@ -100,20 +122,24 @@ export class DanWebSocketServer {
     }
   }
 
-  // ──── Individual mode API (server.principal(name)) ────
+  // ──── Principal mode API ────
 
   principal(name: string): PrincipalTX {
-    this._assertIndividual("principal");
+    if (this.mode !== "principal" && this.mode !== "session_principal_topic") {
+      throw new DanWSError("INVALID_MODE", `server.principal() is only available in principal/session_principal_topic mode.`);
+    }
     return this._principals.principal(name);
+  }
+
+  get principals(): string[] {
+    return this._principals.principals;
   }
 
   // ──── Common API ────
 
   enableAuthorization(enabled: boolean, options?: { timeout?: number }): void {
     this._authEnabled = enabled;
-    if (options?.timeout != null) {
-      this._authTimeout = options.timeout;
-    }
+    if (options?.timeout != null) this._authTimeout = options.timeout;
   }
 
   authorize(clientUuid: string, token: string, principal: string): void {
@@ -124,11 +150,10 @@ export class DanWebSocketServer {
     internal.authController.accept(principal);
     internal.session._authorize(principal);
 
-    const authOkFrame: Frame = {
+    this._sendFrame(internal, {
       frameType: FrameType.AuthOk,
       keyId: 0, dataType: DataType.Null, payload: null,
-    };
-    this._sendFrame(internal, authOkFrame);
+    });
 
     this._sessions.set(clientUuid, internal);
     this._activateSession(internal, principal);
@@ -139,12 +164,10 @@ export class DanWebSocketServer {
     if (!internal) return;
 
     this._tmpSessions.delete(clientUuid);
-
-    const authFailFrame: Frame = {
+    this._sendFrame(internal, {
       frameType: FrameType.AuthFail,
       keyId: 0, dataType: DataType.String, payload: reason ?? "Authorization rejected",
-    };
-    this._sendFrame(internal, authFailFrame);
+    });
 
     if (internal.ws) {
       const ws = internal.ws;
@@ -159,9 +182,7 @@ export class DanWebSocketServer {
   getSessionsByPrincipal(principal: string): DanWebSocketSession[] {
     const result: DanWebSocketSession[] = [];
     for (const internal of this._sessions.values()) {
-      if (internal.session.principal === principal) {
-        result.push(internal.session);
-      }
+      if (internal.session.principal === principal) result.push(internal.session);
     }
     return result;
   }
@@ -191,22 +212,19 @@ export class DanWebSocketServer {
   onConnection(cb: (session: DanWebSocketSession) => void): void { this._onConnection.push(cb); }
   onAuthorize(cb: (clientUuid: string, token: string) => void): void { this._onAuthorize.push(cb); }
   onSessionExpired(cb: (session: DanWebSocketSession) => void): void { this._onSessionExpired.push(cb); }
+  onTopicSubscribe(cb: (session: DanWebSocketSession, topic: TopicInfo) => void): void { this._onTopicSubscribe.push(cb); }
+  onTopicUnsubscribe(cb: (session: DanWebSocketSession, topicName: string) => void): void { this._onTopicUnsubscribe.push(cb); }
+  onTopicParamsChange(cb: (session: DanWebSocketSession, topic: TopicInfo) => void): void { this._onTopicParamsChange.push(cb); }
 
-  // ──── Mode guards ────
+  // ──── Mode guard ────
 
-  private _assertBroadcast(method: string): void {
-    if (this.mode !== "broadcast") {
-      throw new DanWSError("INVALID_MODE", `server.${method}() is only available in broadcast mode. Use server.principal(name).${method}() in individual mode.`);
+  private _assertMode(expected: string, method: string): void {
+    if (this.mode !== expected) {
+      throw new DanWSError("INVALID_MODE", `server.${method}() is only available in ${expected} mode.`);
     }
   }
 
-  private _assertIndividual(method: string): void {
-    if (this.mode !== "individual") {
-      throw new DanWSError("INVALID_MODE", `server.${method}() is only available in individual mode. Use server.${method}() directly in broadcast mode.`);
-    }
-  }
-
-  // ──── Internal ────
+  // ──── Internal: PrincipalTX binding (broadcast / principal modes) ────
 
   private _bindPrincipalTX(ptx: PrincipalTX): void {
     ptx._onValue((frame) => {
@@ -224,24 +242,22 @@ export class DanWebSocketServer {
         if (this._sessionMatchesPrincipal(internal, ptx.name) &&
             internal.session.connected &&
             internal.ws && internal.ws.readyState === WS.OPEN) {
-          const resetFrame: Frame = {
+          internal.bulkQueue.enqueue({
             frameType: FrameType.ServerReset,
             keyId: 0, dataType: DataType.Null, payload: null,
-          };
-          internal.bulkQueue.enqueue(resetFrame);
-          const keyFrames = ptx._buildKeyFrames();
-          for (const f of keyFrames) internal.bulkQueue.enqueue(f);
+          });
+          for (const f of ptx._buildKeyFrames()) internal.bulkQueue.enqueue(f);
         }
       }
     });
   }
 
   private _sessionMatchesPrincipal(internal: InternalSession, principalName: string): boolean {
-    if (this.mode === "broadcast") {
-      return principalName === BROADCAST_PRINCIPAL;
-    }
+    if (this.mode === "broadcast") return principalName === BROADCAST_PRINCIPAL;
     return internal.session.principal === principalName;
   }
+
+  // ──── Internal: Connection handling ────
 
   private _handleConnection(ws: WS): void {
     const parser = createStreamParser();
@@ -252,76 +268,20 @@ export class DanWebSocketServer {
       const internal = this._sessions.get(clientUuid) ?? this._tmpSessions.get(clientUuid);
       if (internal) {
         internal.heartbeat.received();
-        if (internal.ws && internal.ws.readyState === WS.OPEN) {
-          internal.ws.send(encodeHeartbeat());
-        }
+        if (internal.ws && internal.ws.readyState === WS.OPEN) internal.ws.send(encodeHeartbeat());
       }
     });
 
     parser.onFrame((frame) => {
       if (!identified) {
         if (frame.frameType !== FrameType.Identify) { ws.close(); return; }
-
         const payload = frame.payload;
         if (payload instanceof Uint8Array && payload.length === 16) {
           clientUuid = bytesToUuid(payload);
         } else { ws.close(); return; }
 
         identified = true;
-
-        // Reconnect check
-        const existing = this._sessions.get(clientUuid);
-        if (existing) {
-          if (existing.ws && existing.ws.readyState === WS.OPEN) existing.ws.close();
-          if (existing.ttlTimer) { clearTimeout(existing.ttlTimer); existing.ttlTimer = null; }
-
-          existing.ws = ws;
-          existing.session._handleReconnect();
-          existing.heartbeat.start();
-
-          existing.bulkQueue.onFlush((data) => {
-            if (existing.ws && existing.ws.readyState === WS.OPEN) existing.ws.send(data);
-          });
-
-          if (this._authEnabled) {
-            this._tmpSessions.set(clientUuid, existing);
-            this._sessions.delete(clientUuid);
-            existing.authController.reset();
-            existing.authController.handleIdentify(uuidToBytes(clientUuid));
-            existing.authController.startTimeout(() => { this._tmpSessions.delete(clientUuid); ws.close(); });
-          } else {
-            const principal = existing.session.principal ?? BROADCAST_PRINCIPAL;
-            existing.session._authorize(principal);
-            this._activateSession(existing, principal);
-          }
-          return;
-        }
-
-        // New session
-        const session = new DanWebSocketSession(clientUuid);
-        const bulkQueue = new BulkQueue();
-        const heartbeat = new HeartbeatManager();
-        const authController = new AuthController({ required: this._authEnabled, timeout: this._authTimeout });
-
-        authController.handleIdentify(uuidToBytes(clientUuid));
-
-        const internal: InternalSession = { session, ws, bulkQueue, heartbeat, authController, ttlTimer: null };
-
-        session._setEnqueue((f) => bulkQueue.enqueue(f));
-        bulkQueue.onFlush((data) => { if (internal.ws && internal.ws.readyState === WS.OPEN) internal.ws.send(data); });
-        heartbeat.onSend((data) => { if (internal.ws && internal.ws.readyState === WS.OPEN) internal.ws.send(data); });
-        heartbeat.onTimeout(() => { this._handleSessionDisconnect(clientUuid); });
-        heartbeat.start();
-
-        if (this._authEnabled) {
-          this._tmpSessions.set(clientUuid, internal);
-          authController.startTimeout(() => { this._tmpSessions.delete(clientUuid); ws.close(); });
-        } else {
-          const defaultPrincipal = this.mode === "broadcast" ? BROADCAST_PRINCIPAL : "default";
-          session._authorize(defaultPrincipal);
-          this._sessions.set(clientUuid, internal);
-          this._activateSession(internal, defaultPrincipal);
-        }
+        this._handleIdentified(ws, clientUuid);
         return;
       }
 
@@ -336,7 +296,21 @@ export class DanWebSocketServer {
         return;
       }
 
-      // Route to session
+      // Client→Server topic frames (topic modes only)
+      if (this._isTopicMode) {
+        const internal = this._sessions.get(clientUuid);
+        if (internal) {
+          if (frame.frameType === FrameType.ClientReset ||
+              frame.frameType === FrameType.ClientKeyRegistration ||
+              frame.frameType === FrameType.ClientValue ||
+              frame.frameType === FrameType.ClientSync) {
+            this._handleClientTopicFrame(internal, frame);
+            return;
+          }
+        }
+      }
+
+      // Route to session handler
       const internal = this._sessions.get(clientUuid);
       if (internal) internal.session._handleFrame(frame);
     });
@@ -351,19 +325,191 @@ export class DanWebSocketServer {
     ws.on("close", () => { if (clientUuid) this._handleSessionDisconnect(clientUuid); });
   }
 
-  private _activateSession(internal: InternalSession, principal: string): void {
-    const effectivePrincipal = this.mode === "broadcast" ? BROADCAST_PRINCIPAL : principal;
-    const ptx = this._principals.principal(effectivePrincipal);
+  private _handleIdentified(ws: WS, clientUuid: string): void {
+    // Reconnect check
+    const existing = this._sessions.get(clientUuid);
+    if (existing) {
+      if (existing.ws && existing.ws.readyState === WS.OPEN) existing.ws.close();
+      if (existing.ttlTimer) { clearTimeout(existing.ttlTimer); existing.ttlTimer = null; }
 
-    internal.session._setTxProviders(
-      () => ptx._buildKeyFrames(),
-      () => ptx._buildValueFrames(),
-    );
+      existing.ws = ws;
+      existing.session._handleReconnect();
+      existing.heartbeat.start();
+      existing.bulkQueue.onFlush((data) => {
+        if (existing.ws && existing.ws.readyState === WS.OPEN) existing.ws.send(data);
+      });
 
-    for (const cb of this._onConnection) { try { cb(internal.session); } catch {} }
+      if (this._authEnabled) {
+        this._tmpSessions.set(clientUuid, existing);
+        this._sessions.delete(clientUuid);
+        existing.authController.reset();
+        existing.authController.handleIdentify(uuidToBytes(clientUuid));
+        existing.authController.startTimeout(() => { this._tmpSessions.delete(clientUuid); ws.close(); });
+      } else {
+        const principal = existing.session.principal ?? BROADCAST_PRINCIPAL;
+        existing.session._authorize(principal);
+        this._activateSession(existing, principal);
+      }
+      return;
+    }
 
-    internal.session._startSync();
+    // New session
+    const session = new DanWebSocketSession(clientUuid);
+    const bulkQueue = new BulkQueue();
+    const heartbeat = new HeartbeatManager();
+    const authController = new AuthController({ required: this._authEnabled, timeout: this._authTimeout });
+
+    authController.handleIdentify(uuidToBytes(clientUuid));
+
+    const internal: InternalSession = {
+      session, ws, bulkQueue, heartbeat, authController,
+      ttlTimer: null, clientRegistry: null, clientValues: null,
+    };
+
+    session._setEnqueue((f) => bulkQueue.enqueue(f));
+    bulkQueue.onFlush((data) => { if (internal.ws && internal.ws.readyState === WS.OPEN) internal.ws.send(data); });
+    heartbeat.onSend((data) => { if (internal.ws && internal.ws.readyState === WS.OPEN) internal.ws.send(data); });
+    heartbeat.onTimeout(() => { this._handleSessionDisconnect(clientUuid); });
+    heartbeat.start();
+
+    if (this._authEnabled) {
+      this._tmpSessions.set(clientUuid, internal);
+      authController.startTimeout(() => { this._tmpSessions.delete(clientUuid); ws.close(); });
+    } else {
+      const defaultPrincipal = this.mode === "broadcast" ? BROADCAST_PRINCIPAL : "default";
+      session._authorize(defaultPrincipal);
+      this._sessions.set(clientUuid, internal);
+      this._activateSession(internal, defaultPrincipal);
+    }
   }
+
+  private _activateSession(internal: InternalSession, principal: string): void {
+    if (this._isTopicMode) {
+      // Topic modes: session manages its own data via SessionTX inside session
+      internal.session._bindSessionTX((f) => internal.bulkQueue.enqueue(f));
+
+      for (const cb of this._onConnection) { try { cb(internal.session); } catch {} }
+
+      // Send empty ServerSync so client transitions to ready
+      internal.bulkQueue.enqueue({
+        frameType: FrameType.ServerSync,
+        keyId: 0, dataType: DataType.Null, payload: null,
+      });
+    } else {
+      // Broadcast / Principal modes: data from PrincipalTX
+      const effectivePrincipal = this.mode === "broadcast" ? BROADCAST_PRINCIPAL : principal;
+      const ptx = this._principals.principal(effectivePrincipal);
+      this._principals._addSession(effectivePrincipal);
+
+      internal.session._setTxProviders(
+        () => ptx._buildKeyFrames(),
+        () => ptx._buildValueFrames(),
+      );
+
+      for (const cb of this._onConnection) { try { cb(internal.session); } catch {} }
+      internal.session._startSync();
+    }
+  }
+
+  // ──── Internal: Client→Server topic frame handling ────
+
+  private _handleClientTopicFrame(internal: InternalSession, frame: Frame): void {
+    switch (frame.frameType) {
+      case FrameType.ClientReset:
+        if (internal.clientRegistry) internal.clientRegistry.clear();
+        else internal.clientRegistry = new KeyRegistry();
+        if (internal.clientValues) internal.clientValues.clear();
+        else internal.clientValues = new Map();
+        break;
+
+      case FrameType.ClientKeyRegistration: {
+        if (!internal.clientRegistry) internal.clientRegistry = new KeyRegistry();
+        internal.clientRegistry.registerOne(frame.keyId, frame.payload as string, frame.dataType);
+        break;
+      }
+
+      case FrameType.ClientValue: {
+        if (!internal.clientValues) internal.clientValues = new Map();
+        internal.clientValues.set(frame.keyId, frame.payload);
+        break;
+      }
+
+      case FrameType.ClientSync: {
+        // All keys + values received. Parse topics and fire callbacks.
+        this._processTopicSync(internal);
+        break;
+      }
+    }
+  }
+
+  private _processTopicSync(internal: InternalSession): void {
+    const session = internal.session;
+
+    // Parse flat keys into topic map
+    // "topic.<idx>.name" = topicName (String)
+    // "topic.<idx>.param.<paramKey>" = value
+    const newTopics = new Map<string, Record<string, unknown>>();
+
+    if (internal.clientRegistry && internal.clientValues) {
+      const indexToName = new Map<string, string>();
+
+      for (const path of internal.clientRegistry.paths) {
+        const match = path.match(/^topic\.(\d+)\.name$/);
+        if (match) {
+          const entry = internal.clientRegistry.getByPath(path);
+          if (entry) {
+            const topicName = internal.clientValues.get(entry.keyId) as string;
+            if (topicName) {
+              indexToName.set(match[1], topicName);
+              if (!newTopics.has(topicName)) newTopics.set(topicName, {});
+            }
+          }
+        }
+      }
+
+      for (const path of internal.clientRegistry.paths) {
+        const match = path.match(/^topic\.(\d+)\.param\.(.+)$/);
+        if (match) {
+          const topicName = indexToName.get(match[1]);
+          if (topicName) {
+            const entry = internal.clientRegistry.getByPath(path);
+            if (entry) {
+              const value = internal.clientValues.get(entry.keyId);
+              if (value !== undefined) newTopics.get(topicName)![match[2]] = value;
+            }
+          }
+        }
+      }
+    }
+
+    // Diff against session's current topics
+    const oldTopics = new Set(session.topics);
+
+    // Unsubscribed
+    for (const oldName of oldTopics) {
+      if (!newTopics.has(oldName)) {
+        session._removeTopic(oldName);
+        for (const cb of this._onTopicUnsubscribe) { try { cb(session, oldName); } catch {} }
+      }
+    }
+
+    // New / changed
+    for (const [name, params] of newTopics) {
+      const existing = session.topic(name);
+      if (!existing) {
+        session._addTopic(name, params);
+        for (const cb of this._onTopicSubscribe) { try { cb(session, { name, params }); } catch {} }
+      } else {
+        const changed = JSON.stringify(existing.params) !== JSON.stringify(params);
+        if (changed) {
+          session._updateTopicParams(name, params);
+          for (const cb of this._onTopicParamsChange) { try { cb(session, { name, params }); } catch {} }
+        }
+      }
+    }
+  }
+
+  // ──── Internal: Session disconnect ────
 
   private _handleSessionDisconnect(uuid: string): void {
     const internal = this._sessions.get(uuid);
@@ -382,6 +528,11 @@ export class DanWebSocketServer {
 
     internal.ttlTimer = setTimeout(() => {
       this._sessions.delete(uuid);
+      const principal = internal.session.principal;
+      if (principal && !this._isTopicMode) {
+        const effectivePrincipal = this.mode === "broadcast" ? BROADCAST_PRINCIPAL : principal;
+        this._principals._removeSession(effectivePrincipal);
+      }
       for (const cb of this._onSessionExpired) { try { cb(internal.session); } catch {} }
     }, this._ttl);
   }

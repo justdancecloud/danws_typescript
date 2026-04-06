@@ -145,6 +145,7 @@ function isKeyRegistrationFrame(ft: FrameType): boolean {
   return ft === FrameType.ServerKeyRegistration || ft === FrameType.ClientKeyRegistration;
 }
 
+
 function isSignalFrame(ft: FrameType): boolean {
   return (
     ft === FrameType.ServerSync ||
