@@ -261,6 +261,18 @@ export class DanWebSocketServer {
       }
     });
 
+    ptx._onIncremental((keyFrame, syncFrame, valueFrame) => {
+      for (const internal of this._sessions.values()) {
+        if (this._sessionMatchesPrincipal(internal, ptx.name) &&
+            internal.session.state === "ready" &&
+            internal.ws && internal.ws.readyState === WS.OPEN) {
+          internal.bulkQueue.enqueue(keyFrame);
+          internal.bulkQueue.enqueue(syncFrame);
+          internal.bulkQueue.enqueue(valueFrame);
+        }
+      }
+    });
+
     ptx._onResync(() => {
       for (const internal of this._sessions.values()) {
         if (this._sessionMatchesPrincipal(internal, ptx.name) &&

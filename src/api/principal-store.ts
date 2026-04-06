@@ -23,6 +23,7 @@ export class PrincipalTX {
   private _needsResync = false;
   private _onValueSet: ((frame: Frame) => void) | null = null;
   private _onKeysChanged: (() => void) | null = null;
+  private _onIncrementalKey: ((keyFrame: Frame, syncFrame: Frame, valueFrame: Frame) => void) | null = null;
   private _flattenedKeys = new Map<string, Set<string>>(); // prefix → set of flattened paths
 
   constructor(name: string) {
@@ -37,6 +38,11 @@ export class PrincipalTX {
   /** @internal */
   _onResync(fn: () => void): void {
     this._onKeysChanged = fn;
+  }
+
+  /** @internal — incremental key addition (avoids full resync) */
+  _onIncremental(fn: (keyFrame: Frame, syncFrame: Frame, valueFrame: Frame) => void): void {
+    this._onIncrementalKey = fn;
   }
 
   /**
@@ -77,7 +83,7 @@ export class PrincipalTX {
     const existing = this._entries.get(key);
 
     if (!existing) {
-      // New key
+      // New key — use incremental registration if available
       const entry: KeyEntry = {
         keyId: this._nextKeyId++,
         path: key,
@@ -85,7 +91,15 @@ export class PrincipalTX {
         value,
       };
       this._entries.set(key, entry);
-      this._triggerResync();
+      if (this._onIncrementalKey) {
+        this._onIncrementalKey(
+          { frameType: FrameType.ServerKeyRegistration, keyId: entry.keyId, dataType: entry.type, payload: entry.path },
+          { frameType: FrameType.ServerSync, keyId: 0, dataType: DataType.Null, payload: null },
+          { frameType: FrameType.ServerValue, keyId: entry.keyId, dataType: entry.type, payload: entry.value },
+        );
+      } else {
+        this._triggerResync();
+      }
       return;
     }
 

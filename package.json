@@ -1,6 +1,6 @@
 {
   "name": "dan-websocket",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Lightweight binary protocol for real-time state synchronization",
   "type": "module",
   "exports": {
@@ -26,7 +26,8 @@
   "scripts": {
     "build": "tsup",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run test && npm run build"
   },
   "keywords": [
     "websocket",
@@ -35,8 +36,16 @@
     "realtime",
     "synchronization"
   ],
-  "author": "",
+  "author": "justdancecloud <justdancecloud@users.noreply.github.com>",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/justdancecloud/danws_typescript.git"
+  },
+  "homepage": "https://github.com/justdancecloud/danws_typescript#readme",
+  "bugs": {
+    "url": "https://github.com/justdancecloud/danws_typescript/issues"
+  },
   "devDependencies": {
     "@types/node": "^25.5.2",
     "@types/ws": "^8.18.1",

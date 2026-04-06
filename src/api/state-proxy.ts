@@ -8,50 +8,63 @@ export function createStateProxy(
   keysFn: () => string[],
   prefix = "",
 ): Record<string, any> {
+  // Build prefix index for O(1) "has children" checks
+  let _prefixSet: Set<string> | null = null;
+  function prefixSet(): Set<string> {
+    if (!_prefixSet) {
+      _prefixSet = new Set<string>();
+      for (const k of keysFn()) {
+        let dot = k.indexOf(".");
+        while (dot !== -1) {
+          _prefixSet.add(k.slice(0, dot + 1)); // "user." , "user.scores." etc
+          dot = k.indexOf(".", dot + 1);
+        }
+      }
+    }
+    return _prefixSet;
+  }
+
+  function hasChildren(path: string): boolean {
+    return prefixSet().has(path + ".");
+  }
+
+  function resolveItem(itemPath: string): unknown {
+    const direct = getter(itemPath);
+    if (direct !== undefined) return direct;
+    if (hasChildren(itemPath)) return createStateProxy(getter, keysFn, itemPath);
+    return undefined;
+  }
+
   return new Proxy({} as any, {
     get(_target, prop, _receiver) {
       if (typeof prop === "symbol") {
-        if (prop === Symbol.toPrimitive) return undefined;
-        if (prop === Symbol.iterator) {
-          return buildIterator(getter, keysFn, prefix);
-        }
+        if (prop === Symbol.iterator) return buildIterator(getter, keysFn, prefix, resolveItem);
         return undefined;
       }
 
       const path = prefix ? `${prefix}.${prop}` : prop;
 
       // Special: "get" method for backward-compat flat access
-      if (!prefix && prop === "get") {
-        return (key: string) => getter(key);
-      }
-      // "keys" property at root
-      if (!prefix && prop === "keys") {
-        return keysFn();
-      }
+      if (!prefix && prop === "get") return (key: string) => getter(key);
+      if (!prefix && prop === "keys") return keysFn();
 
-      // Array-like methods when .length exists
+      // Array-like
       if (prop === "length") {
         const val = getter(`${path}`);
         return val !== undefined ? val : 0;
       }
 
-      if (prop === "forEach" || prop === "map" || prop === "filter" || prop === "find" || prop === "some" || prop === "every" || prop === "reduce") {
-        return buildArrayMethod(prop as string, getter, keysFn, prefix);
+      if (prop === "forEach" || prop === "map" || prop === "filter" ||
+          prop === "find" || prop === "some" || prop === "every" || prop === "reduce") {
+        return buildArrayMethod(prop as string, getter, keysFn, prefix, resolveItem);
       }
 
-      // Check if this is a leaf value
+      // Leaf value
       const direct = getter(path);
-      if (direct !== undefined) {
-        return direct;
-      }
+      if (direct !== undefined) return direct;
 
-      // Check if there are child keys — if so, return nested proxy
-      const childPrefix = `${path}.`;
-      const allKeys = keysFn();
-      const hasChildren = allKeys.some(k => k.startsWith(childPrefix));
-      if (hasChildren) {
-        return createStateProxy(getter, keysFn, path);
-      }
+      // Nested proxy
+      if (hasChildren(path)) return createStateProxy(getter, keysFn, path);
 
       return undefined;
     },
@@ -59,9 +72,7 @@ export function createStateProxy(
     has(_target, prop) {
       if (typeof prop === "symbol") return false;
       const path = prefix ? `${prefix}.${prop}` : String(prop);
-      if (getter(path) !== undefined) return true;
-      const childPrefix = `${path}.`;
-      return keysFn().some(k => k.startsWith(childPrefix));
+      return getter(path) !== undefined || hasChildren(path);
     },
 
     ownKeys(_target) {
@@ -83,8 +94,7 @@ export function createStateProxy(
       if (val !== undefined) {
         return { value: val, writable: false, enumerable: true, configurable: true };
       }
-      const childPrefix = `${path}.`;
-      if (keysFn().some(k => k.startsWith(childPrefix))) {
+      if (hasChildren(path)) {
         return { value: createStateProxy(getter, keysFn, path), writable: false, enumerable: true, configurable: true };
       }
       return undefined;
@@ -96,23 +106,13 @@ function buildIterator(
   getter: (key: string) => unknown,
   keysFn: () => string[],
   prefix: string,
+  resolveItem: (path: string) => unknown,
 ): () => Iterator<any> {
   return function* () {
     const len = getter(`${prefix}.length`);
     if (typeof len !== "number") return;
     for (let i = 0; i < len; i++) {
-      const itemPath = `${prefix}.${i}`;
-      const direct = getter(itemPath);
-      if (direct !== undefined) {
-        yield direct;
-      } else {
-        const childPrefix = `${itemPath}.`;
-        if (keysFn().some(k => k.startsWith(childPrefix))) {
-          yield createStateProxy(getter, keysFn, itemPath);
-        } else {
-          yield undefined;
-        }
-      }
+      yield resolveItem(`${prefix}.${i}`);
     }
   };
 }
@@ -122,6 +122,7 @@ function buildArrayMethod(
   getter: (key: string) => unknown,
   keysFn: () => string[],
   prefix: string,
+  resolveItem: (path: string) => unknown,
 ): (...args: any[]) => any {
   return (...args: any[]) => {
     const len = getter(`${prefix}.length`);
@@ -129,18 +130,7 @@ function buildArrayMethod(
 
     const items: any[] = [];
     for (let i = 0; i < len; i++) {
-      const itemPath = `${prefix}.${i}`;
-      const direct = getter(itemPath);
-      if (direct !== undefined) {
-        items.push(direct);
-      } else {
-        const childPrefix = `${itemPath}.`;
-        if (keysFn().some(k => k.startsWith(childPrefix))) {
-          items.push(createStateProxy(getter, keysFn, itemPath));
-        } else {
-          items.push(undefined);
-        }
-      }
+      items.push(resolveItem(`${prefix}.${i}`));
     }
 
     return (items as any)[method](...args);

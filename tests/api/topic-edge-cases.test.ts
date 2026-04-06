@@ -393,16 +393,17 @@ describe("Edge: Session TTL expiry", () => {
     client.subscribe("expiry");
     await waitFor(300);
 
-    const countBefore = taskCount;
-    expect(countBefore).toBeGreaterThanOrEqual(3);
+    expect(taskCount).toBeGreaterThanOrEqual(3);
 
     // Disconnect — topic handles should be disposed on disconnect
     client.disconnect();
-    await waitFor(500); // wait for TTL expiry
+    await waitFor(100); // small buffer for in-flight timer to settle
+    const countAfterDisconnect = taskCount;
 
-    const countAfter = taskCount;
-    // Timer should have stopped at disconnect
-    expect(countAfter).toBe(countBefore);
+    await waitFor(400); // wait well past timer interval
+
+    // No new ticks should fire after disposal settled
+    expect(taskCount).toBe(countAfterDisconnect);
   });
 });
 

@@ -1,4 +1,3 @@
-import { WebSocket as NodeWebSocket } from "ws";
 import { DataType, FrameType, DanWSError } from "../protocol/types.js";
 import type { Frame } from "../protocol/types.js";
 import { encode } from "../protocol/codec.js";
@@ -26,6 +25,7 @@ export type ClientState =
 
 export interface ClientOptions {
   reconnect?: Partial<ReconnectOptions>;
+  debug?: boolean | ((msg: string, err?: Error) => void);
 }
 
 function generateUUIDv7(): string {
@@ -71,6 +71,7 @@ export class DanWebSocketClient {
   private _heartbeat = new HeartbeatManager();
   private _reconnectEngine: ReconnectEngine;
   private _parser = createStreamParser();
+  private _debug: boolean | ((msg: string, err?: Error) => void) = false;
 
   // Callbacks
   private _onConnect: Array<() => void> = [];
@@ -87,10 +88,14 @@ export class DanWebSocketClient {
     this._url = url;
     this.id = generateUUIDv7();
     const reconnectOpts = { ...DEFAULT_RECONNECT_OPTIONS, ...options?.reconnect };
+    this._debug = options?.debug ?? false;
     this._reconnectEngine = new ReconnectEngine(reconnectOpts);
     this._parser.onFrame((frame) => this._handleFrame(frame));
     this._parser.onHeartbeat(() => this._heartbeat.received());
-    this._parser.onError((err) => { if (err instanceof DanWSError) this._emitError(err); });
+    this._parser.onError((err) => {
+      this._log("Stream parser error", err instanceof Error ? err : new Error(String(err)));
+      if (err instanceof DanWSError) this._emitError(err);
+    });
     this._setupInternals();
   }
 
@@ -122,7 +127,7 @@ export class DanWebSocketClient {
     this._state = "connecting";
 
     try {
-      const WSImpl = (typeof globalThis.WebSocket !== "undefined" ? globalThis.WebSocket : NodeWebSocket) as any;
+      const WSImpl = this._getWebSocketImpl();
       this._ws = new WSImpl(this._url) as WebSocket;
       this._ws.binaryType = "arraybuffer";
       this._ws.onopen = () => this._handleOpen();
@@ -246,7 +251,7 @@ export class DanWebSocketClient {
     this._reconnectEngine.start();
   }
 
-  private _handleMessage(data: ArrayBuffer | Buffer | string): void {
+  private _handleMessage(data: ArrayBuffer | ArrayBufferView | string): void {
     if (typeof data === "string") return;
     const bytes = data instanceof ArrayBuffer
       ? new Uint8Array(data)
@@ -329,12 +334,12 @@ export class DanWebSocketClient {
           } else {
             // Global key (broadcast/principal/flat session)
             for (const cb of this._onReceive) {
-              try { cb(entry.path, frame.payload); } catch {}
+              try { cb(entry.path, frame.payload); } catch (e) { this._log("onReceive callback error", e as Error); }
             }
             // Fire onUpdate with Proxy-based state view
             if (this._onUpdate.length > 0) {
               const view = createStateProxy((k) => this.get(k), () => this.keys);
-              for (const cb of this._onUpdate) { try { cb(view); } catch {} }
+              for (const cb of this._onUpdate) { try { cb(view); } catch (e) { this._log("onUpdate callback error", e as Error); } }
             }
           }
         }
@@ -466,6 +471,22 @@ export class DanWebSocketClient {
     }
   }
 
+  private _getWebSocketImpl(): any {
+    if (typeof globalThis.WebSocket !== "undefined") return globalThis.WebSocket;
+    // Node.js — lazy import to avoid browser bundlers pulling in ws
+    try {
+      const g = globalThis as Record<string, any>;
+      const _require = g["require"] as ((id: string) => any) | undefined;
+      if (_require) return _require("ws");
+    } catch {}
+    throw new DanWSError("NO_WEBSOCKET", "No WebSocket implementation found. Install 'ws' for Node.js.");
+  }
+
+  private _log(msg: string, err?: Error): void {
+    if (typeof this._debug === "function") this._debug(msg, err);
+    else if (this._debug) console.warn(`[dan-ws client] ${msg}`, err ?? "");
+  }
+
   private _on<T extends (...args: any[]) => void>(arr: T[], cb: T): () => void {
     arr.push(cb);
     return () => { const i = arr.indexOf(cb); if (i !== -1) arr.splice(i, 1); };
@@ -473,7 +494,7 @@ export class DanWebSocketClient {
 
   private _emit<T extends unknown[]>(callbacks: Array<(...args: T) => void>, ...args: T): void {
     for (const cb of callbacks) {
-      try { cb(...args); } catch {}
+      try { cb(...args); } catch (e) { this._log("Callback error", e as Error); }
     }
   }
 
