@@ -5,3 +5,7 @@ export type { ServerOptions, ServerMode } from "./server.js";
 export { DanWebSocketSession } from "./session.js";
 export type { SessionState, TopicInfo } from "./session.js";
 export { PrincipalTX, PrincipalManager } from "./principal-store.js";
+export { TopicHandle, TopicPayload, EventType } from "./topic-handle.js";
+export type { TopicCallback } from "./topic-handle.js";
+export { TopicClientHandle } from "./topic-client-handle.js";
+export type { TopicClientPayloadView } from "./topic-client-handle.js";

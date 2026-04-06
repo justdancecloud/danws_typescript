@@ -11,6 +11,8 @@ import { RecoveryController } from "../state/recovery-controller.js";
 import { BulkQueue } from "../connection/bulk-queue.js";
 import { HeartbeatManager } from "../connection/heartbeat-manager.js";
 import { ReconnectEngine, type ReconnectOptions, DEFAULT_RECONNECT_OPTIONS } from "../connection/reconnect-engine.js";
+import { TopicClientHandle } from "./topic-client-handle.js";
+import type { TopicClientPayloadView } from "./topic-client-handle.js";
 
 export type ClientState =
   | "disconnected"
@@ -59,6 +61,9 @@ export class DanWebSocketClient {
   // Topic state (client→server)
   private _subscriptions = new Map<string, Record<string, unknown>>(); // topicName → params
   private _topicDirty = false;
+  private _topicClientHandles = new Map<string, TopicClientHandle>();
+  private _topicIndexMap = new Map<string, number>(); // topicName → wire index
+  private _indexToTopic = new Map<number, string>(); // wire index → topicName
 
   // Connection layers
   private _bulkQueue = new BulkQueue();
@@ -73,6 +78,7 @@ export class DanWebSocketClient {
   private _onReconnecting: Array<(attempt: number, delay: number) => void> = [];
   private _onReconnect: Array<() => void> = [];
   private _onReconnectFailed: Array<() => void> = [];
+  private _onUpdate: Array<(payload: { get(key: string): unknown; keys: string[] }) => void> = [];
   private _onError: Array<(err: DanWSError) => void> = [];
 
   constructor(url: string, options?: ClientOptions) {
@@ -153,12 +159,24 @@ export class DanWebSocketClient {
     return Array.from(this._subscriptions.keys());
   }
 
+  /** Get a topic client handle for scoped data access */
+  topic(name: string): TopicClientHandle {
+    let handle = this._topicClientHandles.get(name);
+    if (!handle) {
+      const idx = this._topicIndexMap.get(name) ?? -1;
+      handle = new TopicClientHandle(name, idx, this._registry, (id) => this._store.get(id));
+      this._topicClientHandles.set(name, handle);
+    }
+    return handle;
+  }
+
   // ──── Event registration ────
 
   onConnect(cb: () => void): void { this._onConnect.push(cb); }
   onDisconnect(cb: () => void): void { this._onDisconnect.push(cb); }
   onReady(cb: () => void): void { this._onReady.push(cb); }
   onReceive(cb: (key: string, value: unknown) => void): void { this._onReceive.push(cb); }
+  onUpdate(cb: (payload: { get(key: string): unknown; keys: string[] }) => void): void { this._onUpdate.push(cb); }
   onReconnecting(cb: (attempt: number, delay: number) => void): void { this._onReconnecting.push(cb); }
   onReconnect(cb: () => void): void { this._onReconnect.push(cb); }
   onReconnectFailed(cb: () => void): void { this._onReconnectFailed.push(cb); }
@@ -292,8 +310,26 @@ export class DanWebSocketClient {
 
         const entry = this._registry.getByKeyId(frame.keyId);
         if (entry) {
-          for (const cb of this._onReceive) {
-            try { cb(entry.path, frame.payload); } catch {}
+          // Check if this is a topic-scoped key (t.<idx>.<userKey>)
+          const topicMatch = entry.path.match(/^t\.(\d+)\.(.+)$/);
+          if (topicMatch) {
+            const idx = parseInt(topicMatch[1]);
+            const userKey = topicMatch[2];
+            const topicName = this._indexToTopic.get(idx);
+            if (topicName) {
+              const handle = this._topicClientHandles.get(topicName);
+              if (handle) handle._notify(userKey, frame.payload);
+            }
+          } else {
+            // Global key (broadcast/principal/flat session)
+            for (const cb of this._onReceive) {
+              try { cb(entry.path, frame.payload); } catch {}
+            }
+            // Fire onUpdate with full state view
+            if (this._onUpdate.length > 0) {
+              const view = { get: (k: string) => this.get(k), keys: this.keys };
+              for (const cb of this._onUpdate) { try { cb(view); } catch {} }
+            }
           }
         }
 
@@ -340,8 +376,20 @@ export class DanWebSocketClient {
     // "topic.<idx>.name" = topicName (String)
     // "topic.<idx>.param.<paramKey>" = value
     const entries: Array<{ path: string; value: unknown }> = [];
+    this._topicIndexMap.clear();
+    this._indexToTopic.clear();
     let idx = 0;
     for (const [topicName, params] of this._subscriptions) {
+      this._topicIndexMap.set(topicName, idx);
+      this._indexToTopic.set(idx, topicName);
+      // Update or create client handle with correct index
+      let handle = this._topicClientHandles.get(topicName);
+      if (!handle) {
+        handle = new TopicClientHandle(topicName, idx, this._registry, (id) => this._store.get(id));
+        this._topicClientHandles.set(topicName, handle);
+      } else {
+        handle._setIndex(idx);
+      }
       entries.push({ path: `topic.${idx}.name`, value: topicName });
       for (const [paramKey, paramValue] of Object.entries(params)) {
         entries.push({ path: `topic.${idx}.param.${paramKey}`, value: paramValue });

@@ -10,6 +10,7 @@ import { HeartbeatManager } from "../connection/heartbeat-manager.js";
 import { DanWebSocketSession } from "./session.js";
 import { PrincipalManager, PrincipalTX } from "./principal-store.js";
 import type { TopicInfo } from "./session.js";
+import { TopicHandle } from "./topic-handle.js";
 import { KeyRegistry } from "../state/key-registry.js";
 
 export type ServerMode = "broadcast" | "principal" | "individual" | "session_topic" | "session_principal_topic";
@@ -35,8 +36,17 @@ interface InternalSession {
 
 const BROADCAST_PRINCIPAL = "__broadcast__";
 
+// Topic namespace object
+interface TopicNamespace {
+  onSubscribe(cb: (session: DanWebSocketSession, topic: TopicHandle) => void): void;
+  onUnsubscribe(cb: (session: DanWebSocketSession, topic: TopicHandle) => void): void;
+  _onSubscribeCbs: Array<(session: DanWebSocketSession, topic: TopicHandle) => void>;
+  _onUnsubscribeCbs: Array<(session: DanWebSocketSession, topic: TopicHandle) => void>;
+}
+
 export class DanWebSocketServer {
   readonly mode: ServerMode;
+  readonly topic: TopicNamespace;
 
   private _principals: PrincipalManager;
   private _wss: WSServer;
@@ -48,7 +58,7 @@ export class DanWebSocketServer {
   private _sessions = new Map<string, InternalSession>();
   private _tmpSessions = new Map<string, InternalSession>();
 
-  // Callbacks
+  // Callbacks (backward compat)
   private _onConnection: Array<(session: DanWebSocketSession) => void> = [];
   private _onAuthorize: Array<(clientUuid: string, token: string) => void> = [];
   private _onSessionExpired: Array<(session: DanWebSocketSession) => void> = [];
@@ -64,13 +74,21 @@ export class DanWebSocketServer {
       throw new DanWSError("INVALID_OPTIONS", "Must specify either port or server");
     }
 
-    // "individual" is alias for "principal"
     let mode = options.mode ?? "principal";
     if (mode === "individual") mode = "principal";
     this.mode = mode;
 
     this._path = options.path ?? "/";
     this._ttl = options.session?.ttl ?? 600_000;
+
+    // Topic namespace
+    const ns: TopicNamespace = {
+      _onSubscribeCbs: [],
+      _onUnsubscribeCbs: [],
+      onSubscribe(cb) { ns._onSubscribeCbs.push(cb); },
+      onUnsubscribe(cb) { ns._onUnsubscribeCbs.push(cb); },
+    };
+    this.topic = ns;
 
     this._principals = new PrincipalManager();
     if (!this._isTopicMode) {
@@ -88,10 +106,6 @@ export class DanWebSocketServer {
 
   private get _isTopicMode(): boolean {
     return this.mode === "session_topic" || this.mode === "session_principal_topic";
-  }
-
-  private get _needsAuth(): boolean {
-    return this.mode === "principal" || this.mode === "session_principal_topic";
   }
 
   // ──── Broadcast mode API ────
@@ -193,6 +207,7 @@ export class DanWebSocketServer {
 
   close(): void {
     for (const internal of this._sessions.values()) {
+      internal.session._disposeAllTopicHandles();
       internal.session._handleDisconnect();
       internal.heartbeat.stop();
       internal.bulkQueue.dispose();
@@ -207,7 +222,7 @@ export class DanWebSocketServer {
     this._wss.close();
   }
 
-  // ──── Event registration ────
+  // ──── Event registration (backward compat) ────
 
   onConnection(cb: (session: DanWebSocketSession) => void): void { this._onConnection.push(cb); }
   onAuthorize(cb: (clientUuid: string, token: string) => void): void { this._onAuthorize.push(cb); }
@@ -224,7 +239,7 @@ export class DanWebSocketServer {
     }
   }
 
-  // ──── Internal: PrincipalTX binding (broadcast / principal modes) ────
+  // ──── Internal: PrincipalTX binding ────
 
   private _bindPrincipalTX(ptx: PrincipalTX): void {
     ptx._onValue((frame) => {
@@ -296,7 +311,7 @@ export class DanWebSocketServer {
         return;
       }
 
-      // Client→Server topic frames (topic modes only)
+      // Client→Server topic frames
       if (this._isTopicMode) {
         const internal = this._sessions.get(clientUuid);
         if (internal) {
@@ -326,7 +341,6 @@ export class DanWebSocketServer {
   }
 
   private _handleIdentified(ws: WS, clientUuid: string): void {
-    // Reconnect check
     const existing = this._sessions.get(clientUuid);
     if (existing) {
       if (existing.ws && existing.ws.readyState === WS.OPEN) existing.ws.close();
@@ -353,7 +367,6 @@ export class DanWebSocketServer {
       return;
     }
 
-    // New session
     const session = new DanWebSocketSession(clientUuid);
     const bulkQueue = new BulkQueue();
     const heartbeat = new HeartbeatManager();
@@ -385,18 +398,13 @@ export class DanWebSocketServer {
 
   private _activateSession(internal: InternalSession, principal: string): void {
     if (this._isTopicMode) {
-      // Topic modes: session manages its own data via SessionTX inside session
       internal.session._bindSessionTX((f) => internal.bulkQueue.enqueue(f));
-
       for (const cb of this._onConnection) { try { cb(internal.session); } catch {} }
-
-      // Send empty ServerSync so client transitions to ready
       internal.bulkQueue.enqueue({
         frameType: FrameType.ServerSync,
         keyId: 0, dataType: DataType.Null, payload: null,
       });
     } else {
-      // Broadcast / Principal modes: data from PrincipalTX
       const effectivePrincipal = this.mode === "broadcast" ? BROADCAST_PRINCIPAL : principal;
       const ptx = this._principals.principal(effectivePrincipal);
       this._principals._addSession(effectivePrincipal);
@@ -435,7 +443,6 @@ export class DanWebSocketServer {
       }
 
       case FrameType.ClientSync: {
-        // All keys + values received. Parse topics and fire callbacks.
         this._processTopicSync(internal);
         break;
       }
@@ -445,9 +452,6 @@ export class DanWebSocketServer {
   private _processTopicSync(internal: InternalSession): void {
     const session = internal.session;
 
-    // Parse flat keys into topic map
-    // "topic.<idx>.name" = topicName (String)
-    // "topic.<idx>.param.<paramKey>" = value
     const newTopics = new Map<string, Record<string, unknown>>();
 
     if (internal.clientRegistry && internal.clientValues) {
@@ -482,26 +486,46 @@ export class DanWebSocketServer {
       }
     }
 
-    // Diff against session's current topics
+    // Diff: unsubscribed
     const oldTopics = new Set(session.topics);
 
-    // Unsubscribed
     for (const oldName of oldTopics) {
       if (!newTopics.has(oldName)) {
-        session._removeTopic(oldName);
+        // Fire new API callbacks
+        const handle = session.getTopicHandle(oldName);
+        if (handle) {
+          for (const cb of this.topic._onUnsubscribeCbs) { try { cb(session, handle); } catch {} }
+        }
+        // Fire backward compat callbacks
         for (const cb of this._onTopicUnsubscribe) { try { cb(session, oldName); } catch {} }
+        // Remove
+        session._removeTopicHandle(oldName);
+        session._removeTopic(oldName);
       }
     }
 
-    // New / changed
+    // Diff: new / changed
     for (const [name, params] of newTopics) {
-      const existing = session.topic(name);
-      if (!existing) {
-        session._addTopic(name, params);
+      const existingHandle = session.getTopicHandle(name);
+      const existingInfo = session.topic(name);
+
+      if (!existingHandle && !existingInfo) {
+        // New subscription — create TopicHandle
+        const handle = session._createTopicHandle(name, params);
+        // Fire new API callbacks
+        for (const cb of this.topic._onSubscribeCbs) { try { cb(session, handle); } catch {} }
+        // Fire backward compat callbacks
         for (const cb of this._onTopicSubscribe) { try { cb(session, { name, params }); } catch {} }
       } else {
-        const changed = JSON.stringify(existing.params) !== JSON.stringify(params);
+        // Check params changed
+        const oldParams = existingHandle ? existingHandle.params : existingInfo?.params;
+        const changed = JSON.stringify(oldParams) !== JSON.stringify(params);
         if (changed) {
+          // Update TopicHandle (auto fires callback with ChangedParamsEvent)
+          if (existingHandle) {
+            existingHandle._updateParams(params);
+          }
+          // Update backward compat
           session._updateTopicParams(name, params);
           for (const cb of this._onTopicParamsChange) { try { cb(session, { name, params }); } catch {} }
         }
@@ -521,6 +545,7 @@ export class DanWebSocketServer {
 
     if (!internal.session.connected) return;
 
+    internal.session._disposeAllTopicHandles();
     internal.session._handleDisconnect();
     internal.heartbeat.stop();
     internal.bulkQueue.clear();

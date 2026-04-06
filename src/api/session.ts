@@ -3,6 +3,7 @@ import type { Frame } from "../protocol/types.js";
 import { serialize } from "../protocol/serializer.js";
 import { detectDataType } from "../protocol/auto-type.js";
 import { validateKeyPath } from "../state/key-registry.js";
+import { TopicHandle, TopicPayload } from "./topic-handle.js";
 
 export type SessionState = "pending" | "authorized" | "synchronizing" | "ready" | "disconnected";
 
@@ -40,14 +41,16 @@ export class DanWebSocketSession {
   private _serverSyncSent = false;
   private _clientReadyReceived = false;
 
-  // ──── Session-level TX store (topic modes) ────
+  // ──── Session-level flat TX store (topic modes backward compat) ────
   private _sessionEntries = new Map<string, KeyEntry>();
   private _sessionNextKeyId = 1;
   private _sessionEnqueue: ((frame: Frame) => void) | null = null;
   private _sessionBound = false;
 
-  // ──── Topic state ────
-  private _topics = new Map<string, TopicInfo>();
+  // ──── Topic handles ────
+  private _topicHandles = new Map<string, TopicHandle>();
+  private _topicIndex = 0;
+  private _topics = new Map<string, TopicInfo>(); // backward compat
 
   constructor(clientUuid: string) {
     this.id = clientUuid;
@@ -75,7 +78,7 @@ export class DanWebSocketSession {
     this._state = "disconnected";
   }
 
-  // ──── Session-level data API (topic modes) ────
+  // ──── Session-level flat data API (backward compat) ────
 
   set(key: string, value: unknown): void {
     if (!this._sessionBound) {
@@ -90,9 +93,7 @@ export class DanWebSocketSession {
     if (!existing) {
       const entry: KeyEntry = {
         keyId: this._sessionNextKeyId++,
-        path: key,
-        type: newType,
-        value,
+        path: key, type: newType, value,
       };
       this._sessionEntries.set(key, entry);
       this._triggerSessionResync();
@@ -141,7 +142,7 @@ export class DanWebSocketSession {
     }
   }
 
-  // ──── Topic API ────
+  // ──── Topic API (backward compat) ────
 
   get topics(): string[] {
     return Array.from(this._topics.keys());
@@ -149,6 +150,16 @@ export class DanWebSocketSession {
 
   topic(name: string): TopicInfo | undefined {
     return this._topics.get(name);
+  }
+
+  // ──── Topic Handle API (new) ────
+
+  getTopicHandle(name: string): TopicHandle | undefined {
+    return this._topicHandles.get(name);
+  }
+
+  get topicHandles(): Map<string, TopicHandle> {
+    return this._topicHandles;
   }
 
   // ──── Internal methods ────
@@ -245,7 +256,7 @@ export class DanWebSocketSession {
     this._state = "authorized";
   }
 
-  /** @internal — topic management */
+  /** @internal — backward compat topic management */
   _addTopic(name: string, params: Record<string, unknown>): void {
     this._topics.set(name, { name, params });
   }
@@ -261,17 +272,51 @@ export class DanWebSocketSession {
     if (t) t.params = params;
   }
 
+  /** @internal — create a new TopicHandle with scoped payload */
+  _createTopicHandle(name: string, params: Record<string, unknown>): TopicHandle {
+    const index = this._topicIndex++;
+    const payload = new TopicPayload(index);
+    if (this._sessionEnqueue) {
+      payload._bind(this._sessionEnqueue, () => this._triggerSessionResync());
+    }
+    const handle = new TopicHandle(name, params, payload, this);
+    this._topicHandles.set(name, handle);
+    // Also maintain backward compat topics map
+    this._topics.set(name, { name, params });
+    return handle;
+  }
+
+  /** @internal — remove and dispose a TopicHandle */
+  _removeTopicHandle(name: string): void {
+    const handle = this._topicHandles.get(name);
+    if (handle) {
+      handle._dispose();
+      this._topicHandles.delete(name);
+      this._topics.delete(name);
+      this._triggerSessionResync();
+    }
+  }
+
+  /** @internal — dispose all topic handles (disconnect/close) */
+  _disposeAllTopicHandles(): void {
+    for (const handle of this._topicHandles.values()) {
+      handle._dispose();
+    }
+    this._topicHandles.clear();
+  }
+
   // ──── Private ────
 
   private _triggerSessionResync(): void {
     if (!this._sessionEnqueue) return;
 
-    // Send ServerReset + re-register all keys + ServerSync + values
+    // ServerReset
     this._sessionEnqueue({
       frameType: FrameType.ServerReset,
       keyId: 0, dataType: DataType.Null, payload: null,
     });
 
+    // Key registrations: flat session entries
     for (const entry of this._sessionEntries.values()) {
       this._sessionEnqueue({
         frameType: FrameType.ServerKeyRegistration,
@@ -281,11 +326,20 @@ export class DanWebSocketSession {
       });
     }
 
+    // Key registrations: topic payload entries
+    for (const handle of this._topicHandles.values()) {
+      for (const f of handle.payload._buildKeyFrames()) {
+        this._sessionEnqueue(f);
+      }
+    }
+
+    // ServerSync
     this._sessionEnqueue({
       frameType: FrameType.ServerSync,
       keyId: 0, dataType: DataType.Null, payload: null,
     });
 
+    // Values: flat session entries
     for (const entry of this._sessionEntries.values()) {
       if (entry.value !== undefined) {
         this._sessionEnqueue({
@@ -294,6 +348,13 @@ export class DanWebSocketSession {
           dataType: entry.type,
           payload: entry.value,
         });
+      }
+    }
+
+    // Values: topic payload entries
+    for (const handle of this._topicHandles.values()) {
+      for (const f of handle.payload._buildValueFrames()) {
+        this._sessionEnqueue(f);
       }
     }
   }
