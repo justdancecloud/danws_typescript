@@ -38,6 +38,8 @@ export enum FrameType {
   Auth = 0x0e,
   AuthOk = 0x0f,
   AuthFail = 0x11,
+  ArrayShiftLeft = 0x20,
+  ArrayShiftRight = 0x21,
 }
 
 export interface Frame {

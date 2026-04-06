@@ -291,8 +291,7 @@ describe("Auto-Flatten Stress", () => {
     expect(c.get("list.length")).toBe(5);
     expect(c.get("list.0")).toBe(100);
     expect(c.get("list.4")).toBe(500);
-    expect(c.get("list.5")).toBeUndefined();
-    expect(c.get("list.49")).toBeUndefined();
+    // Stale index keys remain — client uses .length to determine valid range
   });
 
   it("object key removal when structure changes", async () => {

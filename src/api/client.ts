@@ -361,6 +361,120 @@ export class DanWebSocketClient {
         break;
       }
 
+      case FrameType.ArrayShiftLeft: {
+        // keyId refers to {array}.length — shift values LEFT by count
+        const lengthEntry = this._registry.getByKeyId(frame.keyId);
+        if (lengthEntry) {
+          const lengthPath = lengthEntry.path;
+          const topicMatch = lengthPath.match(/^t\.(\d+)\.(.+)$/);
+          let prefix: string;
+          let isTopic = false;
+          let topicIdx = -1;
+          let userPrefix = "";
+
+          if (topicMatch) {
+            isTopic = true;
+            topicIdx = parseInt(topicMatch[1]);
+            const userKey = topicMatch[2];
+            userPrefix = userKey.slice(0, userKey.length - ".length".length);
+            prefix = lengthPath.slice(0, lengthPath.length - ".length".length);
+          } else {
+            prefix = lengthPath.slice(0, lengthPath.length - ".length".length);
+          }
+
+          const shiftCount = frame.payload as number;
+          const currentLenObj = this._store.get(frame.keyId);
+          const currentLength = typeof currentLenObj === "number" ? currentLenObj : 0;
+
+          // Shift values left: prefix.0 <- prefix.{shift}, prefix.1 <- prefix.{shift+1}, etc.
+          for (let i = 0; i < currentLength - shiftCount; i++) {
+            const src = this._registry.getByPath(`${prefix}.${i + shiftCount}`);
+            const dst = this._registry.getByPath(`${prefix}.${i}`);
+            if (src && dst) {
+              this._store.set(dst.keyId, this._store.get(src.keyId));
+            }
+          }
+
+          // Update length
+          const newLength = currentLength - shiftCount;
+          this._store.set(frame.keyId, newLength);
+
+          // Fire callbacks
+          if (isTopic) {
+            const topicName = this._indexToTopic.get(topicIdx);
+            if (topicName) {
+              const handle = this._topicClientHandles.get(topicName);
+              if (handle) handle._notify(userPrefix + ".length", newLength);
+            }
+          } else {
+            for (const cb of this._onReceive) {
+              try { cb(prefix + ".length", newLength); } catch (e) { this._log("onReceive callback error", e as Error); }
+            }
+            if (this._onUpdate.length > 0) {
+              const view = createStateProxy((k) => this.get(k), () => this.keys);
+              for (const cb of this._onUpdate) { try { cb(view); } catch (e) { this._log("onUpdate callback error", e as Error); } }
+            }
+          }
+        }
+        break;
+      }
+
+      case FrameType.ArrayShiftRight: {
+        // keyId refers to {array}.length — shift values RIGHT by count
+        const lengthEntry = this._registry.getByKeyId(frame.keyId);
+        if (lengthEntry) {
+          const lengthPath = lengthEntry.path;
+          const topicMatch = lengthPath.match(/^t\.(\d+)\.(.+)$/);
+          let prefix: string;
+          let isTopic = false;
+          let topicIdx = -1;
+          let userPrefix = "";
+
+          if (topicMatch) {
+            isTopic = true;
+            topicIdx = parseInt(topicMatch[1]);
+            const userKey = topicMatch[2];
+            userPrefix = userKey.slice(0, userKey.length - ".length".length);
+            prefix = lengthPath.slice(0, lengthPath.length - ".length".length);
+          } else {
+            prefix = lengthPath.slice(0, lengthPath.length - ".length".length);
+          }
+
+          const shiftCount = frame.payload as number;
+          const currentLenObj = this._store.get(frame.keyId);
+          const currentLength = typeof currentLenObj === "number" ? currentLenObj : 0;
+
+          // Shift values right: iterate from high to low to avoid overwriting
+          for (let i = currentLength - 1; i >= 0; i--) {
+            const src = this._registry.getByPath(`${prefix}.${i}`);
+            const dst = this._registry.getByPath(`${prefix}.${i + shiftCount}`);
+            if (src && dst) {
+              this._store.set(dst.keyId, this._store.get(src.keyId));
+            }
+          }
+
+          // Do NOT update length here — server sends length update separately if needed
+
+          // Fire callbacks
+          if (isTopic) {
+            const topicName = this._indexToTopic.get(topicIdx);
+            if (topicName) {
+              const handle = this._topicClientHandles.get(topicName);
+              if (handle) handle._notify(userPrefix + ".length", currentLength);
+            }
+          } else {
+            for (const cb of this._onReceive) {
+              try { cb(prefix + ".length", currentLength); } catch (e) { this._log("onReceive callback error", e as Error); }
+            }
+            if (this._onUpdate.length > 0) {
+              const view = createStateProxy((k) => this.get(k), () => this.keys);
+              for (const cb of this._onUpdate) { try { cb(view); } catch (e) { this._log("onUpdate callback error", e as Error); } }
+            }
+          }
+        }
+        break;
+      }
+
       case FrameType.ServerReady:
         // Server acknowledged our topic sync — no action needed
         break;

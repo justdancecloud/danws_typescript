@@ -96,5 +96,6 @@ export class BulkQueue {
 }
 
 function isValueFrame(frameType: number): boolean {
-  return frameType === 0x01 || frameType === 0x03; // ServerValue or ClientValue
+  // ServerValue or ClientValue — NOT ArrayShiftLeft (0x20) / ArrayShiftRight (0x21) which must not be deduplicated
+  return frameType === 0x01 || frameType === 0x03;
 }

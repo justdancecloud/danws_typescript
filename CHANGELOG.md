@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.0.0 (2026-04-06)
+- **Protocol v3.2**: ARRAY_SHIFT_LEFT (0x20) and ARRAY_SHIFT_RIGHT (0x21) frame types
+- **Auto array diff detection**: shift, append, pop patterns detected automatically
+- **Smart shift detection algorithm**: no k=1..5 limit, any shift amount supported
+- **Array shrink without full resync**: stale index keys cleaned via .length, client uses `.length`
+- **Incremental key registration** for Session and TopicPayload (3 frames instead of full resync)
+- **Value change detection** in PrincipalTX and Session setLeaf — unchanged values no longer re-sent
+- **Principal session index**: O(1) lookup instead of O(N) scan on every value set
+- **Key frame caching**: PrincipalTX avoids rebuilding key frames on every resync
+- **Wire path caching**: TopicPayload avoids string allocation on every buildKeyFrames
+- **Configurable BulkQueue flush interval** (`flushIntervalMs` server option, default 100ms)
+- 286 tests passing (22 new array sync tests)
+
 ## 1.0.3 (2026-04-07)
 - Perf: Incremental key registration for Session and TopicPayload (3 frames instead of full resync)
 - Add: BigDecimal → Float64, BigInteger → Int64 (or String if overflow) auto-detection (Java)

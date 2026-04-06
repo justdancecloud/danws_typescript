@@ -48,6 +48,7 @@ export class DanWebSocketSession {
   private _sessionEnqueue: ((frame: Frame) => void) | null = null;
   private _sessionBound = false;
   private _flattenedKeys = new Map<string, Set<string>>();
+  private _previousArrays = new Map<string, unknown[]>();
 
   // ──── Topic handles ────
   private _topicHandles = new Map<string, TopicHandle>();
@@ -87,22 +88,162 @@ export class DanWebSocketSession {
       throw new DanWSError("INVALID_MODE", "session.set() is only available in topic modes.");
     }
     if (shouldFlatten(value)) {
+      // Array shift detection for array values
+      if (Array.isArray(value)) {
+        const oldArr = this._previousArrays.get(key);
+        // Only use shift optimization for arrays of primitives
+        const hasPrimitiveElements = value.length === 0 || !shouldFlatten(value[0]);
+        if (hasPrimitiveElements && oldArr && oldArr.length > 0 && value.length > 0) {
+          const shift = detectArrayShiftBoth(oldArr, value);
+          if (shift.direction === "left") {
+            this._applyArrayShiftLeft(key, oldArr, value, shift.count);
+            return;
+          }
+          if (shift.direction === "right") {
+            this._applyArrayShiftRight(key, oldArr, value, shift.count);
+            return;
+          }
+        }
+        this._previousArrays.set(key, [...value]);
+      }
+
       const flattened = flattenValue(key, value);
       const newKeys = new Set(flattened.keys());
       const oldKeys = this._flattenedKeys.get(key);
+      let needsResync = false;
       if (oldKeys) {
         for (const oldPath of oldKeys) {
-          if (!newKeys.has(oldPath)) this._sessionEntries.delete(oldPath);
+          if (!newKeys.has(oldPath)) {
+            if (isArrayIndexKey(key, oldPath)) continue; // stale array index — client uses .length
+            this._sessionEntries.delete(oldPath);
+            needsResync = true;
+          }
         }
       }
       this._flattenedKeys.set(key, newKeys);
       for (const [path, leaf] of flattened) {
         this._setLeaf(path, leaf);
       }
-      this._triggerSessionResync();
+      if (needsResync) this._triggerSessionResync();
       return;
     }
     this._setLeaf(key, value);
+  }
+
+  private _applyArrayShiftLeft(key: string, oldArr: unknown[], newArr: unknown[], shiftCount: number): void {
+    const oldLen = oldArr.length;
+    const newLen = newArr.length;
+
+    // 1. Send ARRAY_SHIFT_LEFT frame
+    const lengthEntry = this._sessionEntries.get(key + ".length");
+    if (lengthEntry && this._sessionEnqueue) {
+      this._sessionEnqueue({
+        frameType: FrameType.ArrayShiftLeft,
+        keyId: lengthEntry.keyId,
+        dataType: DataType.Int32,
+        payload: shiftCount,
+      });
+    }
+
+    // 2. Silently update internal store for shifted indices (low to high)
+    for (let i = 0; i < newLen && i < oldLen - shiftCount; i++) {
+      const entry = this._sessionEntries.get(`${key}.${i}`);
+      if (entry) {
+        entry.value = newArr[i];
+      }
+    }
+
+    // 3. Send new tail elements
+    const existingAfterShift = oldLen - shiftCount;
+    for (let i = existingAfterShift; i < newLen; i++) {
+      const elem = newArr[i];
+      if (shouldFlatten(elem)) {
+        const elemFlat = flattenValue(`${key}.${i}`, elem);
+        for (const [path, leaf] of elemFlat) this._setLeaf(path, leaf);
+      } else {
+        this._setLeaf(`${key}.${i}`, elem);
+      }
+    }
+
+    // 4. Always send length — client decrements length on ArrayShiftLeft,
+    //    so we must send the correct final length to restore it.
+    //    Force-send even when newLen === oldLen.
+    const lenEntry = this._sessionEntries.get(key + ".length");
+    if (lenEntry && this._sessionEnqueue) {
+      lenEntry.value = newLen;
+      this._sessionEnqueue({
+        frameType: FrameType.ServerValue,
+        keyId: lenEntry.keyId,
+        dataType: lenEntry.type,
+        payload: newLen,
+      });
+    }
+
+    // 5. Update flattenedKeys
+    const flattened = flattenValue(key, newArr);
+    this._flattenedKeys.set(key, new Set(flattened.keys()));
+
+    // 6. Update previousArrays
+    this._previousArrays.set(key, [...newArr]);
+  }
+
+  private _applyArrayShiftRight(key: string, oldArr: unknown[], newArr: unknown[], shiftCount: number): void {
+    const oldLen = oldArr.length;
+    const newLen = newArr.length;
+
+    // 1. Send ARRAY_SHIFT_RIGHT frame
+    const lengthEntry = this._sessionEntries.get(key + ".length");
+    if (lengthEntry && this._sessionEnqueue) {
+      this._sessionEnqueue({
+        frameType: FrameType.ArrayShiftRight,
+        keyId: lengthEntry.keyId,
+        dataType: DataType.Int32,
+        payload: shiftCount,
+      });
+    }
+
+    // 2. Silently update internal store for shifted indices (high to low)
+    for (let i = oldLen - 1; i >= 0; i--) {
+      const srcEntry = this._sessionEntries.get(`${key}.${i}`);
+      const dstEntry = this._sessionEntries.get(`${key}.${i + shiftCount}`);
+      if (srcEntry && dstEntry) {
+        dstEntry.value = oldArr[i];
+      }
+    }
+
+    // 3. Send new head elements (indices 0..shiftCount-1)
+    for (let i = 0; i < shiftCount; i++) {
+      const elem = newArr[i];
+      if (shouldFlatten(elem)) {
+        const elemFlat = flattenValue(`${key}.${i}`, elem);
+        for (const [path, leaf] of elemFlat) this._setLeaf(path, leaf);
+      } else {
+        this._setLeaf(`${key}.${i}`, elem);
+      }
+    }
+
+    // 3b. Send overflow tail elements (old elements shifted beyond old bounds)
+    for (let i = oldLen; i < newLen; i++) {
+      const elem = newArr[i];
+      if (shouldFlatten(elem)) {
+        const elemFlat = flattenValue(`${key}.${i}`, elem);
+        for (const [path, leaf] of elemFlat) this._setLeaf(path, leaf);
+      } else {
+        this._setLeaf(`${key}.${i}`, elem);
+      }
+    }
+
+    // 4. Update length if changed
+    if (newLen !== oldLen) {
+      this._setLeaf(key + ".length", newLen);
+    }
+
+    // 5. Update flattenedKeys
+    const flattened = flattenValue(key, newArr);
+    this._flattenedKeys.set(key, new Set(flattened.keys()));
+
+    // 6. Update previousArrays
+    this._previousArrays.set(key, [...newArr]);
   }
 
   private _setLeaf(key: string, value: unknown): void {
@@ -411,4 +552,48 @@ export class DanWebSocketSession {
   private _emitError(err: DanWSError): void {
     this._emit(this._onError, err);
   }
+}
+
+interface ShiftResult {
+  direction: "left" | "right" | "none";
+  count: number;
+}
+
+function detectArrayShiftBoth(oldArr: unknown[], newArr: unknown[]): ShiftResult {
+  const oldLen = oldArr.length;
+  const newLen = newArr.length;
+
+  // 1. Left shift: find new[0] in oldArr → gives shift amount k
+  const newFirst = newArr[0];
+  for (let k = 1; k < oldLen; k++) {
+    if (oldArr[k] !== newFirst) continue;
+    const matchLen = Math.min(oldLen - k, newLen);
+    if (matchLen <= 0) continue;
+    let match = true;
+    for (let i = 1; i < matchLen; i++) {
+      if (oldArr[i + k] !== newArr[i]) { match = false; break; }
+    }
+    if (match) return { direction: "left", count: k };
+  }
+
+  // 2. Right shift: find old[0] in newArr → gives shift amount k
+  const oldFirst = oldArr[0];
+  for (let k = 1; k < newLen; k++) {
+    if (newArr[k] !== oldFirst) continue;
+    const matchLen = Math.min(oldLen, newLen - k);
+    if (matchLen <= 0) continue;
+    let match = true;
+    for (let i = 1; i < matchLen; i++) {
+      if (oldArr[i] !== newArr[i + k]) { match = false; break; }
+    }
+    if (match) return { direction: "right", count: k };
+  }
+
+  return { direction: "none", count: 0 };
+}
+
+function isArrayIndexKey(prefix: string, path: string): boolean {
+  if (!path.startsWith(prefix + '.')) return false;
+  const suffix = path.slice(prefix.length + 1);
+  return suffix.length > 0 && /^\d+$/.test(suffix);
 }

@@ -1,9 +1,11 @@
 # dan-websocket
 
-> Binary protocol for real-time state sync — **auto-flatten objects, field-level dedup, self-hosted**
+> Binary protocol for real-time state sync — **auto-flatten objects, field-level dedup, array shift optimization, self-hosted**
 
 [![npm](https://img.shields.io/npm/v/dan-websocket)](https://www.npmjs.com/package/dan-websocket)
 [![Maven Central](https://img.shields.io/maven-central/v/io.github.justdancecloud/dan-websocket)](https://central.sonatype.com/artifact/io.github.justdancecloud/dan-websocket)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![Tests](https://img.shields.io/badge/tests-286%20passing-brightgreen)]()
 
 ```
 npm install dan-websocket
@@ -14,6 +16,8 @@ Also available in **Java**: [dan-websocket for Java](https://github.com/justdanc
 ---
 
 ## Why dan-websocket?
+
+Most real-time libraries send entire JSON objects when a single field changes. dan-websocket auto-flattens objects into binary leaf keys and only sends what changed — down to a single 8-byte float.
 
 ```typescript
 // Server — just put objects in
@@ -37,17 +41,21 @@ client.onUpdate((state) => {
 
 When `processes[0].cpu` changes from 12.3 to 15.0, only that **8-byte Float64** goes over the wire. Not the entire object.
 
+When a chart array shifts by 1 (`[a,b,c,d] -> [b,c,d,e]`), dan-websocket sends **1 shift frame + 1 new element** instead of re-sending every element. This is the **ARRAY_SHIFT protocol** — new in v2.0.
+
 ---
 
 ## Comparison
 
 |  | **dan-websocket** | **Socket.IO** | **Firebase RTDB** | **Ably** |
 |---|---|---|---|---|
-| Protocol | Binary (DanProtocol) | JSON text, Engine.IO + Socket.IO double-wrapped | JSON (internal protocol) | MessagePack / JSON |
+| Protocol | Binary (DanProtocol v3.2) | JSON text, Engine.IO + Socket.IO double-wrapped | JSON (internal protocol) | MessagePack / JSON |
 | **bool update** | **~13 bytes** | ~50-70 bytes | ~80-120 bytes | ~60-90 bytes |
 | **100 fields, 1 changed** | **~13 bytes** | **~several KB** (entire object re-sent) | ~100-200 bytes (changed path + subtree) | **~several KB** (entire message re-sent) |
+| **Array shift (1000 items)** | **1 shift frame + new items** | **entire array re-sent** | **entire subtree** | **entire array re-sent** |
 | Field-level dedup | Yes, automatic. Same key within 100ms batch = last value only | No | Partial (path-level, includes subtree) | No |
 | Auto-flatten | Yes. `set("user", { name, scores: [...] })` auto-expands | No. `JSON.stringify` whole object | Partial. Tree structure but no types | No. Developer serializes |
+| Array sync | Auto shift/append/pop detection | Manual | Manual | Manual |
 | Type auto-detect | 13 types: Bool, Float64, Int64, String, Date, Binary... | No. Everything is JSON string | string, number, boolean only | No. Developer responsibility |
 | Self-hosted | Yes. `npm install`, your server | Yes. `npm install` | No. Google Cloud only | No. SaaS only |
 | Price | **Free (MIT)** | **Free (MIT)** | Free tier, then pay-per-use | $49.99/mo+, $2.50/million msgs |
@@ -56,31 +64,7 @@ When `processes[0].cpu` changes from 12.3 to 15.0, only that **8-byte Float64** 
 | Bundle size | ~8 KB (1 dep: `ws`) | ~10.4 KB gzipped | ~90+ KB (Firebase SDK) | ~50+ KB (Ably SDK) |
 | Cross-language | TypeScript + Java (wire-compatible) | Many | Many SDKs | Many SDKs |
 
-The unique combination: **binary + field-level dedup + auto-flatten + self-hosted + free**. No other library has all five.
-
----
-
-## Auto-Flatten: How Objects Work on the Wire
-
-When you `set("user", { name: "Alice", scores: [10, 20] })`, it auto-flattens:
-
-| Server call | Wire keys |
-|-------------|-----------|
-| `set("user", { name: "Alice", scores: [10, 20] })` | `user.name` = "Alice", `user.scores.0` = 10, `user.scores.1` = 20, `user.scores.length` = 2 |
-
-- Arrays get an automatic `.length` key
-- Nested objects flatten recursively (up to depth 10)
-- When an array shrinks, leftover keys are auto-cleaned
-- Only changed fields trigger a push — built-in dedup
-- Primitives (`string`, `number`, `boolean`, `Date`, `Uint8Array`, `null`) pass through unchanged
-
-The client reconstructs objects via Proxy:
-
-```typescript
-client.data.user.name;           // "Alice" (calls get("user.name") internally)
-client.data.user.scores[0];     // 10
-client.data.user.scores.forEach(s => console.log(s));  // 10, 20
-```
+The unique combination: **binary + field-level dedup + auto-flatten + array shift protocol + self-hosted + free**. No other library has all six.
 
 ---
 
@@ -94,7 +78,9 @@ Works in **Node.js** (server + client) and **browsers** (client only).
 
 ---
 
-## 4 Modes
+## Quick Start
+
+### 4 Modes
 
 | Mode | Auth | Data Scope | Topics | Use Case |
 |------|------|-----------|--------|----------|
@@ -102,10 +88,6 @@ Works in **Node.js** (server + client) and **browsers** (client only).
 | `principal` | Yes | Per-principal (shared across devices) | No | Games, per-user data |
 | `session_topic` | No | Per-session per-topic | Yes | Public charts, anonymous boards |
 | `session_principal_topic` | Yes | Per-session per-topic + principal identity | Yes | Authenticated boards, personalized charts |
-
----
-
-## Quick Start
 
 ### 1. Broadcast Mode — all clients get the same data
 
@@ -175,7 +157,7 @@ server.principal("alice").set("profile", {
   inventory: ["sword", "shield"],
 });
 
-// Alice on PC and mobile → both update instantly
+// Alice on PC and mobile -> both update instantly
 server.principal("alice").set("profile", {
   name: "Alice",
   score: 200,  // only this 8-byte field gets pushed
@@ -199,7 +181,7 @@ server.topic.onSubscribe((session, topic) => {
       if (event === EventType.ChangedParamsEvent) t.payload.clear();
       const data = await db.getPosts(t.params);
       t.payload.set("result", {
-        items: data.items,       // array of objects → auto-flattened
+        items: data.items,       // array of objects -> auto-flattened
         totalCount: data.total,
       });
     });
@@ -240,7 +222,7 @@ client.topic("chart.cpu").onUpdate((payload) => {
   cpuChart.addPoint(payload.point.value, payload.point.timestamp);
 });
 
-// Page change → callback re-fires
+// Page change -> callback re-fires
 document.getElementById("next")!.onclick = () => {
   client.setParams("board.posts", { page: 2, size: 20 });
 };
@@ -275,18 +257,203 @@ server.topic.onSubscribe((session, topic) => {
 
 ---
 
-## Callback Unsubscribe
+## Auto-Flatten: How Objects Work on the Wire
 
-All `on*()` methods return an unsubscribe function — essential for SPA frameworks:
+When you `set("user", { name: "Alice", scores: [10, 20] })`, it auto-flattens:
+
+| Server call | Wire keys |
+|-------------|-----------|
+| `set("user", { name: "Alice", scores: [10, 20] })` | `user.name` = "Alice", `user.scores.0` = 10, `user.scores.1` = 20, `user.scores.length` = 2 |
+
+- Arrays get an automatic `.length` key
+- Nested objects flatten recursively (up to depth 10)
+- When an array shrinks, leftover keys are auto-cleaned
+- Only changed fields trigger a push — built-in dedup
+- Primitives (`string`, `number`, `boolean`, `Date`, `Uint8Array`, `null`) pass through unchanged
+
+The client reconstructs objects via Proxy:
 
 ```typescript
-// React example
-useEffect(() => {
-  const unsub = client.onReceive((key, value) => {
-    setState(prev => ({ ...prev, [key]: value }));
-  });
-  return unsub; // cleanup on unmount
-}, []);
+client.data.user.name;           // "Alice" (calls get("user.name") internally)
+client.data.user.scores[0];     // 10
+client.data.user.scores.forEach(s => console.log(s));  // 10, 20
+```
+
+---
+
+## Array Sync Optimization (NEW in v2.0)
+
+### The Problem
+
+Real-time applications constantly update arrays — stock price history, chat messages, log entries, order books. The most common pattern is **shift+push**: remove the oldest element, add the newest.
+
+```
+Before: [100, 101, 102, 103, 104]    (5 price points)
+After:  [101, 102, 103, 104, 105]    (shifted left by 1, appended 105)
+```
+
+With traditional libraries (Socket.IO, Firebase, Ably), this requires re-sending **every element** that moved — that is N value frames for an N-element array. For a 1000-point chart updating 5x/second, that is **5000 value frames per second**.
+
+### The Solution: ARRAY_SHIFT Protocol
+
+dan-websocket v2.0 introduces **automatic array diff detection**. When you call `set()` with an updated array, the server compares old vs new and detects shift patterns:
+
+```typescript
+// Server just sets the new array — detection is automatic
+topic.payload.set("prices", newPriceHistory);  // shift+push detected!
+```
+
+Instead of re-sending every shifted element, the server sends:
+1. **One ARRAY_SHIFT_LEFT frame** — tells the client to shift its local array
+2. **Only the new tail elements** — the values that are actually new
+3. **Updated length** — if the array size changed
+
+The client performs the shift locally in O(n) memory copy, then applies only the new values.
+
+### Frame Count Comparison
+
+| Scenario | Without ARRAY_SHIFT | With ARRAY_SHIFT (v2.0) |
+|----------|-------------------|------------------------|
+| 100-point chart, shift by 1 | 101 frames (100 values + length) | 3 frames (1 shift + 1 new value + length) |
+| 1000-point chart, shift by 1 | 1001 frames | 3 frames |
+| 50-item order book, shift by 5 | 51 frames | 7 frames (1 shift + 5 new values + length) |
+| Append only (no shift) | 2 frames | 2 frames (no overhead) |
+| Pop from front | 101 frames | 2 frames (1 shift + length) |
+
+### Practical Examples
+
+**Stock chart — sliding window of 200 candles:**
+
+```typescript
+// Server
+const candles: number[] = [];
+
+onNewCandle((price) => {
+  candles.push(price);
+  if (candles.length > 200) candles.shift();
+  topic.payload.set("chart", candles);
+  // Automatically detected as left-shift-by-1 + append
+  // Sends: 1 ARRAY_SHIFT_LEFT + 1 new value + length = 3 frames
+  // Without: 201 frames every tick
+});
+```
+
+**Historical data — prepend new entries:**
+
+```typescript
+// Server
+onNewLogEntry((entry) => {
+  logs.unshift(entry);   // prepend
+  if (logs.length > 100) logs.pop();
+  topic.payload.set("logs", logs);
+  // Automatically detected as right-shift-by-1 + new head
+  // Sends: 1 ARRAY_SHIFT_RIGHT + 1 new value + length = 3 frames
+});
+```
+
+**Order book — top 50 bids shift as market moves:**
+
+```typescript
+// Server
+onOrderBookUpdate((bids) => {
+  topic.payload.set("bids", bids.slice(0, 50));
+  // If the order book shifted (e.g., top bid filled),
+  // auto-detected as left-shift + new tail entries
+});
+```
+
+### Smart Detection Algorithm
+
+The detection algorithm works for **any shift amount** — not limited to small shifts. It:
+
+1. Compares old and new arrays element-by-element
+2. Detects left-shift patterns: `old[k:]` matches `new[0:len]`
+3. Detects right-shift patterns: `old[0:len]` matches `new[k:k+len]`
+4. Falls through to normal flatten if no shift detected (field-level dedup still applies)
+
+For arrays of objects, each object element is auto-flattened. The shift frame moves the flattened keys, and only truly new/changed leaf values are sent.
+
+### Supported Patterns
+
+| Pattern | Detection | Protocol Frame |
+|---------|-----------|---------------|
+| `shift() + push()` | Left shift | `ARRAY_SHIFT_LEFT` (0x20) |
+| `unshift()` (prepend) | Right shift | `ARRAY_SHIFT_RIGHT` (0x21) |
+| `splice(0, k)` + append | Left shift by k | `ARRAY_SHIFT_LEFT` (0x20) |
+| `push()` only | No shift needed | Normal value frames |
+| `pop()` only | Length decrease | Length update only |
+| Random mutation | No shift | Field-level dedup (only changed elements sent) |
+
+---
+
+## Topic API
+
+Topics provide per-session scoped data with a callback-driven update model.
+
+### setCallback + setDelayedTask Pattern
+
+```typescript
+server.topic.onSubscribe((session, topic) => {
+  if (topic.name === "stock.chart") {
+    // setCallback runs immediately, then on every event
+    topic.setCallback(async (event, t) => {
+      if (event === EventType.ChangedParamsEvent) {
+        t.payload.clear();  // params changed, reset
+      }
+      const data = await fetchStockData(t.params.symbol);
+      t.payload.set("candles", data.candles);  // array shift auto-detected!
+      t.payload.set("meta", { symbol: t.params.symbol, lastUpdate: new Date() });
+    });
+
+    // Re-run callback every 200ms
+    topic.setDelayedTask(200);
+  }
+});
+```
+
+### EventType
+
+| Event | When |
+|-------|------|
+| `EventType.SubscribedEvent` | Client first subscribes |
+| `EventType.ChangedParamsEvent` | Client calls `setParams()` |
+| `EventType.DelayedTaskEvent` | Timer fires (from `setDelayedTask`) |
+
+### TopicPayload
+
+Each topic gets an isolated key-value store (`topic.payload`):
+
+| Method | Description |
+|--------|-------------|
+| `payload.set(key, value)` | Set data (auto-flattens objects/arrays) |
+| `payload.get(key)` | Read value |
+| `payload.keys` | List all keys |
+| `payload.clear(key?)` | Remove one or all |
+
+---
+
+## Client Proxy
+
+Access synced state as natural JavaScript objects — no `get()` calls needed:
+
+```typescript
+// Direct object access
+client.data.dashboard.cpu;              // 72.5
+client.data.dashboard.memory.used;      // 8.2
+client.data.users[0].name;             // "Alice"
+
+// Array iteration works
+client.data.users.forEach(u => console.log(u.name));
+client.data.scores.map(s => s * 2);
+client.data.items.filter(i => i.active);
+
+// Topic data too
+client.topic("chart").data.candles[0];
+client.topic("board").data.items.forEach(i => console.log(i.title));
+
+// Flat access still available
+client.get("dashboard.cpu");
+client.topic("chart").get("candles.0");
 ```
 
 ---
@@ -305,6 +472,7 @@ const server = new DanWebSocketServer({
     ttl: 600_000,            // Session TTL in ms after disconnect (default: 10 min)
   },
   debug: true,               // Log callback errors to console (or pass a custom logger function)
+  flushIntervalMs: 100,      // BulkQueue batch flush interval in ms (default: 100)
 });
 ```
 
@@ -354,7 +522,7 @@ const client = new DanWebSocketClient("ws://localhost:8080/ws", {
 
 | Method | Description |
 |--------|-------------|
-| `server.set(key, value)` | Set value (object/array auto-flattens), sync to all |
+| `server.set(key, value)` | Set value (object/array auto-flattens, arrays get shift detection), sync to all |
 | `server.get(key)` | Read current value |
 | `server.keys` | All registered key paths |
 | `server.clear(key)` | Remove key (or all flattened children) |
@@ -364,7 +532,7 @@ const client = new DanWebSocketClient("ws://localhost:8080/ws", {
 
 | Method | Description |
 |--------|-------------|
-| `server.principal(name).set(key, value)` | Set for principal (auto-flattens) |
+| `server.principal(name).set(key, value)` | Set for principal (auto-flattens, shift-detects arrays) |
 | `server.principal(name).get(key)` | Read value |
 | `server.principal(name).keys` | List keys |
 | `server.principal(name).clear(key)` | Remove key |
@@ -386,7 +554,7 @@ const client = new DanWebSocketClient("ws://localhost:8080/ws", {
 | `topic.setCallback(fn)` | Register + run immediately. `fn(event, topic, session)` |
 | `topic.setDelayedTask(ms)` | Start periodic polling |
 | `topic.clearDelayedTask()` | Stop polling |
-| `topic.payload.set(key, value)` | Set data (auto-flattens objects/arrays) |
+| `topic.payload.set(key, value)` | Set data (auto-flattens, shift-detects arrays) |
 | `topic.payload.get(key)` | Read value |
 | `topic.payload.keys` | List keys |
 | `topic.payload.clear(key?)` | Remove one or all |
@@ -401,6 +569,8 @@ const client = new DanWebSocketClient("ws://localhost:8080/ws", {
 | `client.get(key)` | Get flat key value |
 | `client.data` | Proxy object for nested access: `client.data.user.name` |
 | `client.keys` | All key paths |
+| `client.subscribe(topic, params?)` | Subscribe to a topic |
+| `client.setParams(topic, params)` | Update topic params (triggers callback) |
 | `client.topic(name).data` | Proxy for topic data: `topic.data.items[0].title` |
 | `client.topic(name).get(key)` | Get flat key in topic |
 
@@ -415,32 +585,23 @@ const client = new DanWebSocketClient("ws://localhost:8080/ws", {
 | `client.topic(name).onUpdate((payload) => {})` | Any change in topic, Proxy view |
 | `client.onConnect(cb)` / `onDisconnect(cb)` / `onError(cb)` | Connection events |
 
----
+### Callback Unsubscribe
 
-## Best Practices
-
-**Use objects freely** — they auto-flatten into individual binary fields. Only changed fields get pushed.
+All `on*()` methods return an unsubscribe function — essential for SPA frameworks:
 
 ```typescript
-// Good — just set the object
-server.set("dashboard", { cpu: 72.5, memory: { used: 8.2, total: 16 } });
-
-// Changes to cpu only push 8 bytes, not the whole object
-server.set("dashboard", { cpu: 73.1, memory: { used: 8.2, total: 16 } });
-```
-
-**JSON.stringify** is only needed for truly variable-schema data (user-generated config, arbitrary metadata). For structured data with known fields, use objects directly.
-
-**Large datasets** — for 1000+ row tables, use REST for the bulk load and dan-websocket for change signals:
-
-```typescript
-topic.payload.set("lastUpdate", new Date());  // signal
-// Client fetches full data via REST on signal change
+// React example
+useEffect(() => {
+  const unsub = client.onReceive((key, value) => {
+    setState(prev => ({ ...prev, [key]: value }));
+  });
+  return unsub; // cleanup on unmount
+}, []);
 ```
 
 ---
 
-## Auto-Detected Types
+## Type Auto-Detection
 
 | JS Value | Wire Type | Size |
 |----------|-----------|------|
@@ -448,10 +609,32 @@ topic.payload.set("lastUpdate", new Date());  // signal
 | `true` / `false` | Bool | 1 byte |
 | `42`, `3.14` | Float64 | 8 bytes |
 | `123n` (bigint >= 0) | Uint64 | 8 bytes |
+| `-5n` (bigint < 0) | Int64 | 8 bytes |
 | `"hello"` | String | variable |
 | `new Uint8Array([...])` | Binary | variable |
 | `new Date()` | Timestamp | 8 bytes |
 | `{ ... }` / `[...]` | Auto-flatten | per-field |
+
+Java-specific: `BigDecimal` maps to Float64, `BigInteger` to Int64 (or String if overflow), `Short` to Int32, `Byte` to Uint8.
+
+---
+
+## Performance
+
+dan-websocket v2.0 includes multiple layers of optimization:
+
+| Optimization | Benefit |
+|-------------|---------|
+| **Binary protocol** | ~13 bytes for a boolean update vs ~50-70 bytes for JSON |
+| **Field-level dedup** | Unchanged values in objects are never re-sent |
+| **Array shift detection** | Sliding window of 1000 items: 3 frames instead of 1001 |
+| **BulkQueue batching** | All changes within the flush window (default 100ms) sent as one message |
+| **Value dedup in batch** | Same key set twice in one batch = only latest value sent |
+| **Key frame caching** | PrincipalTX avoids rebuilding key frames on every resync |
+| **Wire path caching** | TopicPayload avoids string allocation on every buildKeyFrames |
+| **Principal session index** | O(1) session lookup instead of O(N) scan |
+| **Incremental key registration** | New keys registered incrementally (3 frames) instead of full state resync |
+| **Configurable flush interval** | Tune `flushIntervalMs` for latency vs throughput tradeoff |
 
 ---
 
@@ -462,7 +645,22 @@ topic.payload.set("lastUpdate", new Date());  // signal
 | **TypeScript** | [`dan-websocket`](https://www.npmjs.com/package/dan-websocket) | `npm install dan-websocket` |
 | **Java** | [`io.github.justdancecloud:dan-websocket`](https://central.sonatype.com/artifact/io.github.justdancecloud/dan-websocket) | Gradle / Maven |
 
-Wire-compatible. A TypeScript server can serve Java clients and vice versa.
+Wire-compatible. A TypeScript server can serve Java clients and vice versa. Both implement DanProtocol v3.2, including ARRAY_SHIFT frames.
+
+---
+
+## Protocol
+
+dan-websocket uses **DanProtocol v3.2** — a binary, DLE-framed protocol designed for minimal bandwidth and self-synchronizing streams.
+
+Key protocol features:
+- **DLE-based framing** — no length prefixes, robust on unreliable streams
+- **4-byte KeyID** — supports 4B+ unique keys
+- **13 auto-detected data types** — no schema needed
+- **ARRAY_SHIFT_LEFT (0x20)** and **ARRAY_SHIFT_RIGHT (0x21)** — array shift optimization frames
+- Heartbeat with 10s interval, 15s timeout
+
+See [dan-protocol-3.0.md](./dan-protocol-3.0.md) for the full specification.
 
 ---
 

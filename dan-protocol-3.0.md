@@ -1,6 +1,6 @@
-# DanProtocol v3.1 Specification
+# DanProtocol v3.2 Specification
 
-> April 2026 | Real-Time State Synchronization with Auto-Flatten
+> April 2026 | Real-Time State Synchronization with Auto-Flatten & Array Operations
 
 ---
 
@@ -94,6 +94,93 @@ Sent every 10 seconds by both sides. If not received within 15 seconds, the conn
 | `0x0A` | ClientResyncReq | C→S | — |
 | `0x0B` | ClientReset | C→S | — |
 | `0x0C` | ServerResyncReq | S→C | — |
+
+### 3.6 Array Operations
+
+| Code | Name | Direction | Payload |
+|------|------|-----------|---------|
+| `0x20` | ArrayShiftLeft | S→C | Int32 shift count |
+| `0x21` | ArrayShiftRight | S→C | Int32 shift count |
+
+**ARRAY_SHIFT_LEFT (0x20):**
+
+Used to optimize array left-shift patterns (e.g., sliding window: `[1,2,3,4,5]` -> `[2,3,4,5,6]`). Instead of re-sending all shifted element values, the server sends a single ARRAY_SHIFT_LEFT frame.
+
+- **KeyID**: keyId of `{arrayKey}.length` (identifies which array)
+- **DataType**: Int32 (0x06)
+- **Payload**: shift count as int32 (4 bytes) — how many elements shifted off the front
+
+**Client action on receiving ARRAY_SHIFT_LEFT(keyId=lengthKeyId, payload=k):**
+
+1. Look up the path for `lengthKeyId` (e.g., `data.length`)
+2. Derive the array prefix (e.g., `data`)
+3. Read current length from store
+4. For `i` from `0` to `length - k - 1`: copy value at `{prefix}.{i+k}` to `{prefix}.{i}`
+5. Update length to `length - k`
+6. Fire callbacks for `{prefix}.length`
+
+**ARRAY_SHIFT_RIGHT (0x21):**
+
+Used to optimize array right-shift patterns (e.g., prepend: `[1,2,3,4,5]` -> `[0,1,2,3,4,5]`). Instead of re-sending all shifted element values, the server sends a single ARRAY_SHIFT_RIGHT frame.
+
+- **KeyID**: keyId of `{arrayKey}.length` (identifies which array)
+- **DataType**: Int32 (0x06)
+- **Payload**: shift count as int32 (4 bytes) — how many positions to shift right
+
+**Client action on receiving ARRAY_SHIFT_RIGHT(keyId=lengthKeyId, payload=k):**
+
+1. Look up the path for `lengthKeyId` (e.g., `data.length`)
+2. Derive the array prefix (e.g., `data`)
+3. Read current length from store
+4. For `i` from `length - 1` down to `0`: copy value at `{prefix}.{i}` to `{prefix}.{i+k}`
+5. Do NOT update length (server sends new head elements + length update separately)
+6. Fire callbacks for `{prefix}.length`
+
+**Server-side array diff detection (Smart Detection Algorithm):**
+
+When `set(key, array)` is called and a previous array exists for that key, the server compares old and new arrays to detect shift patterns. The algorithm supports **any shift amount** — not limited to small shifts.
+
+1. **Left shift**: Compare `old[k:]` against `new[0:matchLen]` for any valid `k`
+   - If a contiguous match is found: send ARRAY_SHIFT_LEFT(k) + new tail elements + length update if changed
+   - Common patterns: `shift() + push()`, `splice(0, k) + append`, sliding windows
+2. **Right shift**: Compare `old[0:matchLen]` against `new[k:k+matchLen]` for any valid `k`
+   - If a contiguous match is found: send ARRAY_SHIFT_RIGHT(k) + new head elements + length update if changed
+   - Common patterns: `unshift()`, prepend operations
+3. **Append only**: If `new.length > old.length` and `old` is a prefix of `new`, only new tail elements are sent
+4. **Pop only**: If `new.length < old.length` and `new` is a prefix of `old`, only the length update is sent
+5. If no shift pattern detected: fall through to normal flatten (field-level dedup handles unchanged elements)
+
+**Frame count comparison:**
+
+| Scenario | Without ARRAY_SHIFT | With ARRAY_SHIFT |
+|----------|-------------------|-----------------|
+| 100-element array, shift left by 1 | 101 frames | 3 frames |
+| 1000-element array, shift left by 1 | 1001 frames | 3 frames |
+| 50-element array, shift left by 5 | 51 frames | 7 frames |
+| Append 1 element | 2 frames | 2 frames |
+| Pop 1 element | 1 frame | 1 frame |
+
+This optimization reduces a shift of N elements from N value frames to 1 ARRAY_SHIFT frame + only the truly new values.
+
+**Wire example — left shift by 1 on array "scores" (length keyId=0x00000005):**
+
+```
+10 02 20 00 00 00 05 06 00 00 00 01 10 03
+|  |  |  |--------|  |  |--------| |  |
+|  |  |    KeyID   |  |  payload   DLE ETX
+|  |  FrameType   DataType=Int32
+DLE STX  =0x20     =0x06         shiftCount=1
+```
+
+**Wire example — right shift by 1 on array "scores" (length keyId=0x00000005):**
+
+```
+10 02 21 00 00 00 05 06 00 00 00 01 10 03
+|  |  |  |--------|  |  |--------| |  |
+|  |  |    KeyID   |  |  payload   DLE ETX
+|  |  FrameType   DataType=Int32
+DLE STX  =0x21     =0x06         shiftCount=1
+```
 
 ### 3.5 Authentication
 
