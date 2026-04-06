@@ -54,6 +54,32 @@ Works in **Node.js** (server + client) and **browsers** (client only).
 
 ---
 
+## Two ways to listen for data
+
+Every mode supports two callback styles. Use whichever fits your use case:
+
+| Callback | Fires when | Receives | Best for |
+|----------|-----------|----------|----------|
+| `onReceive((key, value) => {})` | Each individual key changes | Changed key + value | Updating a specific UI element per key |
+| `onUpdate((payload) => {})` | Any key changes | Full current state | Rendering a whole view from latest state |
+
+```typescript
+// onReceive — per key, granular
+client.onReceive((key, value) => {
+  if (key === "sensor.temp") tempGauge.update(value);
+  if (key === "sensor.status") statusBadge.set(value);
+});
+
+// onUpdate — full state, all at once
+client.onUpdate((payload) => {
+  tempGauge.update(payload.get("sensor.temp"));
+  statusBadge.set(payload.get("sensor.status"));
+  // payload.keys → ["sensor.temp", "sensor.status", ...]
+});
+```
+
+---
+
 ## Quick Start
 
 ### 1. Broadcast Mode — all clients get the same data
@@ -77,19 +103,33 @@ setInterval(() => {
 }, 1000);
 ```
 
-**Client:**
+**Client — using onReceive (per key):**
 
 ```typescript
 import { DanWebSocketClient } from "dan-websocket";
 
 const client = new DanWebSocketClient("ws://localhost:8080");
 
-client.onReady(() => {
-  console.log("Temperature:", client.get("sensor.temp"));
+client.onReceive((key, value) => {
+  if (key === "sensor.temp") tempGauge.update(value);
+  if (key === "sensor.status") statusLabel.textContent = value;
+  if (key === "sensor.active") activeLight.classList.toggle("on", value);
 });
 
-client.onReceive((key, value) => {
-  document.getElementById(key)!.textContent = String(value);
+client.connect();
+```
+
+**Client — using onUpdate (full state):**
+
+```typescript
+const client = new DanWebSocketClient("ws://localhost:8080");
+
+client.onUpdate((payload) => {
+  tempGauge.update(payload.get("sensor.temp"));
+  statusLabel.textContent = payload.get("sensor.status");
+  activeLight.classList.toggle("on", payload.get("sensor.active"));
+  lastUpdate.textContent = payload.get("sensor.updated")?.toISOString();
+  // payload.keys → all current keys
 });
 
 client.connect();
@@ -111,21 +151,44 @@ server.onAuthorize(async (uuid, token) => {
 });
 
 server.principal("alice").set("score", 100);
+server.principal("alice").set("rank", 1);
+server.principal("alice").set("name", "Alice");
+
 server.principal("bob").set("score", 50);
+server.principal("bob").set("rank", 2);
+server.principal("bob").set("name", "Bob");
 
 // Alice opens on PC and mobile → both see score=100
 server.principal("alice").set("score", 200); // both devices update instantly
 ```
 
-**Client:**
+**Client — using onReceive:**
 
 ```typescript
 const client = new DanWebSocketClient("ws://localhost:8080");
 
 client.onConnect(() => client.authorize(myJWTToken));
 
-client.onReady(() => {
-  console.log("My score:", client.get("score"));
+client.onReceive((key, value) => {
+  if (key === "score") scoreDisplay.textContent = value;
+  if (key === "rank") rankBadge.textContent = `#${value}`;
+  if (key === "name") nameLabel.textContent = value;
+});
+
+client.connect();
+```
+
+**Client — using onUpdate:**
+
+```typescript
+const client = new DanWebSocketClient("ws://localhost:8080");
+
+client.onConnect(() => client.authorize(myJWTToken));
+
+client.onUpdate((payload) => {
+  scoreDisplay.textContent = payload.get("score");
+  rankBadge.textContent = `#${payload.get("rank")}`;
+  nameLabel.textContent = payload.get("name");
 });
 
 client.connect();
@@ -188,7 +251,7 @@ server.topic.onSubscribe((session, topic) => {
 });
 ```
 
-**Client:**
+**Client — using onReceive (per key, per topic):**
 
 ```typescript
 import { DanWebSocketClient } from "dan-websocket";
@@ -201,23 +264,56 @@ client.onReady(() => {
   client.subscribe("stock.price", { symbol: "AAPL" });
 });
 
-// Each topic has isolated data — no key collisions
-// onUpdate fires whenever any value in the topic's payload changes
+client.topic("board.posts").onReceive((key, value) => {
+  if (key === "items") renderTable(JSON.parse(value));
+  if (key === "totalCount") updatePagination(value);
+});
+
+client.topic("chart.cpu").onReceive((key, value) => {
+  if (key === "value") cpuGauge.update(value);
+  if (key === "timestamp") cpuTime.textContent = value.toISOString();
+});
+
+client.topic("stock.price").onReceive((key, value) => {
+  if (key === "price") priceChart.addPoint(value);
+  if (key === "updated") priceTime.textContent = value.toISOString();
+});
+
+client.connect();
+```
+
+**Client — using onUpdate (full payload, per topic):**
+
+```typescript
+const client = new DanWebSocketClient("ws://localhost:8080");
+
+client.onReady(() => {
+  client.subscribe("board.posts", { page: 1, size: 20, sort: "date" });
+  client.subscribe("chart.cpu");
+  client.subscribe("stock.price", { symbol: "AAPL" });
+});
+
 client.topic("board.posts").onUpdate((payload) => {
   renderTable(JSON.parse(payload.get("items")));
   updatePagination(payload.get("totalCount"));
-  // payload.keys   → ["items", "totalCount"]
-  // payload.get(k) → current value for key
 });
 
 client.topic("chart.cpu").onUpdate((payload) => {
   cpuGauge.update(payload.get("value"));
+  cpuTime.textContent = payload.get("timestamp")?.toISOString();
 });
 
 client.topic("stock.price").onUpdate((payload) => {
   priceChart.addPoint(payload.get("price"));
+  priceTime.textContent = payload.get("updated")?.toISOString();
 });
 
+client.connect();
+```
+
+**Interacting with topics:**
+
+```typescript
 // Change page → callback re-fires immediately with ChangedParamsEvent, then polling resumes
 document.getElementById("next-page")!.onclick = () => {
   client.setParams("board.posts", { page: 2, size: 20, sort: "date" });
@@ -232,8 +328,6 @@ document.getElementById("stock-select")!.onchange = (e) => {
 document.getElementById("close-cpu")!.onclick = () => {
   client.unsubscribe("chart.cpu");
 };
-
-client.connect();
 ```
 
 **What happens under the hood:**
@@ -321,13 +415,15 @@ client.onReady(() => {
   client.subscribe("my.notifications");
 });
 
+// onUpdate — render full order list when any order data changes
 client.topic("my.orders").onUpdate((payload) => {
   renderOrders(JSON.parse(payload.get("items")));
   orderCount.textContent = payload.get("total");
 });
 
-client.topic("my.notifications").onUpdate((payload) => {
-  updateBadge(payload.get("unread"));
+// onReceive — just watch for unread count changes
+client.topic("my.notifications").onReceive((key, value) => {
+  if (key === "unread") updateBadge(value);
 });
 
 // Filter change → callback re-fires with ChangedParamsEvent
@@ -423,10 +519,17 @@ const client = new DanWebSocketClient(url, options?);
 | `client.connect()` | Connect to server |
 | `client.disconnect()` | Disconnect (no auto-reconnect) |
 | `client.authorize(token)` | Send auth token |
-| `client.get(key)` | Current value — broadcast/principal modes |
+| `client.get(key)` | Current value |
 | `client.keys` | All received key paths |
 | `client.id` | This client's UUIDv7 (stable across reconnects) |
 | `client.state` | Connection state string |
+
+**Data callbacks (broadcast / principal modes):**
+
+| Callback | Description |
+|----------|-------------|
+| `client.onReceive((key, value) => {})` | Fires per individual key change |
+| `client.onUpdate((payload) => {})` | Fires on any change with full state: `payload.get(key)`, `payload.keys` |
 
 **Topic methods (topic modes):**
 
@@ -438,13 +541,15 @@ const client = new DanWebSocketClient(url, options?);
 | `client.topics` | List subscribed topic names |
 | `client.topic(name).get(key)` | Get value within topic's payload |
 | `client.topic(name).keys` | List keys in topic's payload |
-| `client.topic(name).onUpdate(cb)` | Fires on any payload change: `(payload) => void` |
+| `client.topic(name).onReceive((key, value) => {})` | Fires per key change in this topic |
+| `client.topic(name).onUpdate((payload) => {})` | Fires on any change with full topic payload |
+
+**Connection events:**
 
 | Event | Callback |
 |-------|----------|
 | `client.onConnect(cb)` | WebSocket opened |
 | `client.onReady(cb)` | Initial sync complete |
-| `client.onReceive(cb)` | Value update: `(key, value)` — broadcast/principal modes |
 | `client.onDisconnect(cb)` | Connection lost |
 | `client.onReconnecting(cb)` | Retry attempt: `(attempt, delayMs)` |
 | `client.onReconnect(cb)` | Reconnected and re-synced |
