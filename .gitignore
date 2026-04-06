@@ -3,4 +3,5 @@ dist/
 *.md
 !README.md
 !dan-protocol-3.0.md
+!CHANGELOG.md
 .env
