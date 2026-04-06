@@ -202,17 +202,20 @@ client.onReady(() => {
 });
 
 // Each topic has isolated data — no key collisions
-client.topic("board.posts").onReceive((key, value) => {
-  if (key === "items") renderTable(JSON.parse(value));
-  if (key === "totalCount") updatePagination(value);
+// onUpdate fires whenever any value in the topic's payload changes
+client.topic("board.posts").onUpdate((payload) => {
+  renderTable(JSON.parse(payload.get("items")));
+  updatePagination(payload.get("totalCount"));
+  // payload.keys   → ["items", "totalCount"]
+  // payload.get(k) → current value for key
 });
 
-client.topic("chart.cpu").onReceive((key, value) => {
-  if (key === "value") cpuGauge.update(value);
+client.topic("chart.cpu").onUpdate((payload) => {
+  cpuGauge.update(payload.get("value"));
 });
 
-client.topic("stock.price").onReceive((key, value) => {
-  if (key === "price") priceChart.addPoint(value);
+client.topic("stock.price").onUpdate((payload) => {
+  priceChart.addPoint(payload.get("price"));
 });
 
 // Change page → callback re-fires immediately with ChangedParamsEvent, then polling resumes
@@ -318,13 +321,13 @@ client.onReady(() => {
   client.subscribe("my.notifications");
 });
 
-client.topic("my.orders").onReceive((key, value) => {
-  if (key === "items") renderOrders(JSON.parse(value));
-  if (key === "total") orderCount.textContent = value;
+client.topic("my.orders").onUpdate((payload) => {
+  renderOrders(JSON.parse(payload.get("items")));
+  orderCount.textContent = payload.get("total");
 });
 
-client.topic("my.notifications").onReceive((key, value) => {
-  if (key === "unread") updateBadge(value);
+client.topic("my.notifications").onUpdate((payload) => {
+  updateBadge(payload.get("unread"));
 });
 
 // Filter change → callback re-fires with ChangedParamsEvent
@@ -435,7 +438,7 @@ const client = new DanWebSocketClient(url, options?);
 | `client.topics` | List subscribed topic names |
 | `client.topic(name).get(key)` | Get value within topic's payload |
 | `client.topic(name).keys` | List keys in topic's payload |
-| `client.topic(name).onReceive(cb)` | Listen for updates: `(key, value) => void` |
+| `client.topic(name).onUpdate(cb)` | Fires on any payload change: `(payload) => void` |
 
 | Event | Callback |
 |-------|----------|
