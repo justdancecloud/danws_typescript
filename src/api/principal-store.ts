@@ -25,6 +25,7 @@ export class PrincipalTX {
   private _onKeysChanged: (() => void) | null = null;
   private _onIncrementalKey: ((keyFrame: Frame, syncFrame: Frame, valueFrame: Frame) => void) | null = null;
   private _flattenedKeys = new Map<string, Set<string>>(); // prefix → set of flattened paths
+  private _cachedKeyFrames: Frame[] | null = null;
 
   constructor(name: string) {
     this.name = name;
@@ -71,6 +72,7 @@ export class PrincipalTX {
 
   private _clearOne(path: string): void {
     if (this._entries.delete(path)) {
+      this._cachedKeyFrames = null;
       this._triggerResync();
     }
   }
@@ -91,6 +93,7 @@ export class PrincipalTX {
         value,
       };
       this._entries.set(key, entry);
+      this._cachedKeyFrames = null;
       if (this._onIncrementalKey) {
         this._onIncrementalKey(
           { frameType: FrameType.ServerKeyRegistration, keyId: entry.keyId, dataType: entry.type, payload: entry.path },
@@ -107,6 +110,7 @@ export class PrincipalTX {
       // Type changed — re-register
       existing.type = newType;
       existing.value = value;
+      this._cachedKeyFrames = null;
       this._triggerResync();
       return;
     }
@@ -151,8 +155,10 @@ export class PrincipalTX {
       if (flatKeys) {
         for (const path of flatKeys) this._entries.delete(path);
         this._flattenedKeys.delete(key);
+        this._cachedKeyFrames = null;
         this._triggerResync();
       } else if (this._entries.delete(key)) {
+        this._cachedKeyFrames = null;
         this._triggerResync();
       }
     } else {
@@ -160,6 +166,7 @@ export class PrincipalTX {
         this._entries.clear();
         this._flattenedKeys.clear();
         this._nextKeyId = 1;
+        this._cachedKeyFrames = null;
         this._triggerResync();
       }
     }
@@ -167,6 +174,8 @@ export class PrincipalTX {
 
   /** @internal — build key registration frames + SYNC for a session */
   _buildKeyFrames(): Frame[] {
+    if (this._cachedKeyFrames) return this._cachedKeyFrames;
+
     const frames: Frame[] = [];
     for (const entry of this._entries.values()) {
       frames.push({
@@ -183,6 +192,7 @@ export class PrincipalTX {
       dataType: DataType.Null,
       payload: null,
     });
+    this._cachedKeyFrames = frames;
     return frames;
   }
 

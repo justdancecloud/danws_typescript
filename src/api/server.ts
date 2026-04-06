@@ -22,6 +22,7 @@ export interface ServerOptions {
   mode?: ServerMode;
   session?: { ttl?: number };
   debug?: boolean | ((msg: string, err?: Error) => void);
+  flushIntervalMs?: number;
 }
 
 interface InternalSession {
@@ -56,9 +57,11 @@ export class DanWebSocketServer {
   private _authEnabled = false;
   private _authTimeout = 5000;
   private _debug: boolean | ((msg: string, err?: Error) => void) = false;
+  private _flushIntervalMs: number | undefined;
 
   private _sessions = new Map<string, InternalSession>();
   private _tmpSessions = new Map<string, InternalSession>();
+  private _principalIndex = new Map<string, Set<InternalSession>>();
 
   // Callbacks (backward compat)
   private _onConnection: Array<(session: DanWebSocketSession) => void> = [];
@@ -83,6 +86,7 @@ export class DanWebSocketServer {
     this._path = options.path ?? "/";
     this._ttl = options.session?.ttl ?? 600_000;
     this._debug = options.debug ?? false;
+    this._flushIntervalMs = options.flushIntervalMs;
 
     // Topic namespace
     const ns: TopicNamespace = {
@@ -197,9 +201,12 @@ export class DanWebSocketServer {
   }
 
   getSessionsByPrincipal(principal: string): DanWebSocketSession[] {
+    const effectivePrincipal = this.mode === "broadcast" ? BROADCAST_PRINCIPAL : principal;
+    const set = this._principalIndex.get(effectivePrincipal);
+    if (!set) return [];
     const result: DanWebSocketSession[] = [];
-    for (const internal of this._sessions.values()) {
-      if (internal.session.principal === principal) result.push(internal.session);
+    for (const internal of set) {
+      result.push(internal.session);
     }
     return result;
   }
@@ -223,6 +230,7 @@ export class DanWebSocketServer {
     }
     this._sessions.clear();
     this._tmpSessions.clear();
+    this._principalIndex.clear();
     this._wss.close();
   }
 
@@ -248,13 +256,32 @@ export class DanWebSocketServer {
     }
   }
 
+  // ──── Internal: Principal index management ────
+
+  private _indexAddSession(principal: string, internal: InternalSession): void {
+    let set = this._principalIndex.get(principal);
+    if (!set) { set = new Set(); this._principalIndex.set(principal, set); }
+    set.add(internal);
+  }
+
+  private _indexRemoveSession(principal: string, internal: InternalSession): void {
+    const set = this._principalIndex.get(principal);
+    if (set) {
+      set.delete(internal);
+      if (set.size === 0) this._principalIndex.delete(principal);
+    }
+  }
+
+  private _getSessionsForPrincipal(principalName: string): Iterable<InternalSession> {
+    return this._principalIndex.get(principalName) ?? [];
+  }
+
   // ──── Internal: PrincipalTX binding ────
 
   private _bindPrincipalTX(ptx: PrincipalTX): void {
     ptx._onValue((frame) => {
-      for (const internal of this._sessions.values()) {
-        if (this._sessionMatchesPrincipal(internal, ptx.name) &&
-            internal.session.state === "ready" &&
+      for (const internal of this._getSessionsForPrincipal(ptx.name)) {
+        if (internal.session.state === "ready" &&
             internal.ws && internal.ws.readyState === WS.OPEN) {
           internal.bulkQueue.enqueue(frame);
         }
@@ -262,9 +289,8 @@ export class DanWebSocketServer {
     });
 
     ptx._onIncremental((keyFrame, syncFrame, valueFrame) => {
-      for (const internal of this._sessions.values()) {
-        if (this._sessionMatchesPrincipal(internal, ptx.name) &&
-            internal.session.state === "ready" &&
+      for (const internal of this._getSessionsForPrincipal(ptx.name)) {
+        if (internal.session.state === "ready" &&
             internal.ws && internal.ws.readyState === WS.OPEN) {
           internal.bulkQueue.enqueue(keyFrame);
           internal.bulkQueue.enqueue(syncFrame);
@@ -274,9 +300,8 @@ export class DanWebSocketServer {
     });
 
     ptx._onResync(() => {
-      for (const internal of this._sessions.values()) {
-        if (this._sessionMatchesPrincipal(internal, ptx.name) &&
-            internal.session.connected &&
+      for (const internal of this._getSessionsForPrincipal(ptx.name)) {
+        if (internal.session.connected &&
             internal.ws && internal.ws.readyState === WS.OPEN) {
           internal.bulkQueue.enqueue({
             frameType: FrameType.ServerReset,
@@ -286,11 +311,6 @@ export class DanWebSocketServer {
         }
       }
     });
-  }
-
-  private _sessionMatchesPrincipal(internal: InternalSession, principalName: string): boolean {
-    if (this.mode === "broadcast") return principalName === BROADCAST_PRINCIPAL;
-    return internal.session.principal === principalName;
   }
 
   // ──── Internal: Connection handling ────
@@ -389,7 +409,7 @@ export class DanWebSocketServer {
     }
 
     const session = new DanWebSocketSession(clientUuid);
-    const bulkQueue = new BulkQueue();
+    const bulkQueue = new BulkQueue(this._flushIntervalMs);
     const heartbeat = new HeartbeatManager();
     const authController = new AuthController({ required: this._authEnabled, timeout: this._authTimeout });
 
@@ -429,6 +449,7 @@ export class DanWebSocketServer {
       const effectivePrincipal = this.mode === "broadcast" ? BROADCAST_PRINCIPAL : principal;
       const ptx = this._principals.principal(effectivePrincipal);
       this._principals._addSession(effectivePrincipal);
+      this._indexAddSession(effectivePrincipal, internal);
 
       internal.session._setTxProviders(
         () => ptx._buildKeyFrames(),
@@ -582,6 +603,7 @@ export class DanWebSocketServer {
       if (principal && !this._isTopicMode) {
         const effectivePrincipal = this.mode === "broadcast" ? BROADCAST_PRINCIPAL : principal;
         this._principals._removeSession(effectivePrincipal);
+        this._indexRemoveSession(effectivePrincipal, internal);
       }
       for (const cb of this._onSessionExpired) { try { cb(internal.session); } catch (e) { this._log("onSessionExpired callback error", e as Error); } }
     }, this._ttl);

@@ -1,13 +1,18 @@
 import type { Frame } from "../protocol/types.js";
 import { encodeBatch } from "../protocol/codec.js";
 
-const FLUSH_INTERVAL = 100; // ms
+const DEFAULT_FLUSH_INTERVAL = 100; // ms
 
 export class BulkQueue {
   private queue: Frame[] = [];
   private valueFrames = new Map<number, Frame>(); // keyId → latest value frame (dedup)
   private timer: ReturnType<typeof setTimeout> | null = null;
   private _onFlush: ((data: Uint8Array) => void) | null = null;
+  private _flushInterval: number;
+
+  constructor(flushIntervalMs?: number) {
+    this._flushInterval = flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL;
+  }
 
   onFlush(callback: (data: Uint8Array) => void): void {
     this._onFlush = callback;
@@ -73,7 +78,7 @@ export class BulkQueue {
       this.timer = setTimeout(() => {
         this.timer = null;
         this.flush();
-      }, FLUSH_INTERVAL);
+      }, this._flushInterval);
     }
   }
 

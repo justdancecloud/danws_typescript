@@ -27,6 +27,7 @@ export class TopicPayload {
   private _enqueue: ((frame: Frame) => void) | null = null;
   private _onResync: (() => void) | null = null;
   private _flattenedKeys = new Map<string, Set<string>>();
+  private _wirePathCache = new Map<string, string>();
 
   constructor(index: number, allocateKeyId: () => number) {
     this._index = index;
@@ -49,6 +50,7 @@ export class TopicPayload {
         for (const oldPath of oldKeys) {
           if (!newKeys.has(oldPath)) {
             this._entries.delete(oldPath);
+            this._wirePathCache.delete(oldPath);
             deleted = true;
           }
         }
@@ -146,16 +148,22 @@ export class TopicPayload {
     if (key !== undefined) {
       const flatKeys = this._flattenedKeys.get(key);
       if (flatKeys) {
-        for (const path of flatKeys) this._entries.delete(path);
+        for (const path of flatKeys) {
+          this._entries.delete(path);
+          this._wirePathCache.delete(path);
+        }
         this._flattenedKeys.delete(key);
+        this._wirePathCache.delete(key);
         if (this._onResync) this._onResync();
       } else if (this._entries.delete(key)) {
+        this._wirePathCache.delete(key);
         if (this._onResync) this._onResync();
       }
     } else {
       if (this._entries.size > 0) {
         this._entries.clear();
         this._flattenedKeys.clear();
+        this._wirePathCache.clear();
         if (this._onResync) this._onResync();
       }
     }
@@ -165,11 +173,16 @@ export class TopicPayload {
   _buildKeyFrames(): Frame[] {
     const frames: Frame[] = [];
     for (const [key, entry] of this._entries) {
+      let wirePath = this._wirePathCache.get(key);
+      if (!wirePath) {
+        wirePath = `t.${this._index}.${key}`;
+        this._wirePathCache.set(key, wirePath);
+      }
       frames.push({
         frameType: FrameType.ServerKeyRegistration,
         keyId: entry.keyId,
         dataType: entry.type,
-        payload: `t.${this._index}.${key}`,
+        payload: wirePath,
       });
     }
     return frames;

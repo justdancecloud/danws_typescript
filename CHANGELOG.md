@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.2 (2026-04-07)
+- Perf: Principal session index — O(1) lookup instead of O(N) scan on every value set
+- Perf: PrincipalTX key frame caching — avoid rebuilding on every resync
+- Perf: TopicPayload wire path caching — avoid string allocation on every buildKeyFrames
+- Add: Configurable BulkQueue flush interval (`flushIntervalMs` server option, default 100ms)
+
 ## 1.0.1 (2026-04-06)
 - Fix: Flatten value change detection — unchanged leaf values no longer re-sent
   - `PrincipalTX.setLeaf()`, `Session.setLeaf()` now skip enqueue when value equals existing
