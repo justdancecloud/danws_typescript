@@ -111,7 +111,9 @@ export class PrincipalTX {
       return;
     }
 
-    // Same key, same type — just update value and broadcast
+    // Same key, same type — skip if value unchanged
+    if (existing.value === value) return;
+
     existing.value = value;
 
     if (this._onValueSet) {

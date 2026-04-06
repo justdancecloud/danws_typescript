@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.1 (2026-04-06)
+- Fix: Flatten value change detection — unchanged leaf values no longer re-sent
+  - `PrincipalTX.setLeaf()`, `Session.setLeaf()` now skip enqueue when value equals existing
+  - Reduces unnecessary wire traffic when re-setting flattened objects with partial changes
+
 ## 1.0.0 (2026-04-06)
 - **Stable release** — production-ready
 - 264 tests passing

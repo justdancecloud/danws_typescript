@@ -129,6 +129,8 @@ export class DanWebSocketSession {
       return;
     }
 
+    if (existing.value === value) return;
+
     existing.value = value;
     if (this._sessionEnqueue) {
       this._sessionEnqueue({
