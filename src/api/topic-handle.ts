@@ -44,15 +44,17 @@ export class TopicPayload {
       const flattened = flattenValue(key, value);
       const newKeys = new Set(flattened.keys());
       const oldKeys = this._flattenedKeys.get(key);
+      let deleted = false;
       if (oldKeys) {
         for (const oldPath of oldKeys) {
           if (!newKeys.has(oldPath)) {
             this._entries.delete(oldPath);
+            deleted = true;
           }
         }
       }
       this._flattenedKeys.set(key, newKeys);
-      let needsResync = false;
+      let needsResync = deleted;
       for (const [path, leaf] of flattened) {
         if (this._setLeafInternal(path, leaf)) needsResync = true;
       }

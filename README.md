@@ -291,6 +291,63 @@ useEffect(() => {
 
 ---
 
+## Configuration
+
+### Server Options
+
+```typescript
+const server = new DanWebSocketServer({
+  port: 8080,               // Port to listen on (or use `server` option)
+  server: httpServer,        // Attach to existing HTTP server (mutually exclusive with `port`)
+  path: "/ws",               // WebSocket endpoint path (default: "/")
+  mode: "broadcast",         // "broadcast" | "principal" | "session_topic" | "session_principal_topic"
+  session: {
+    ttl: 600_000,            // Session TTL in ms after disconnect (default: 10 min)
+  },
+  debug: true,               // Log callback errors to console (or pass a custom logger function)
+});
+```
+
+**Using with Express / HTTP server:**
+
+```typescript
+import { createServer } from "http";
+import express from "express";
+
+const app = express();
+const httpServer = createServer(app);
+const ws = new DanWebSocketServer({ server: httpServer, path: "/ws", mode: "broadcast" });
+
+httpServer.listen(3000);
+```
+
+**Custom path — client must match:**
+
+```typescript
+// Server
+const server = new DanWebSocketServer({ port: 8080, path: "/realtime" });
+
+// Client
+const client = new DanWebSocketClient("ws://localhost:8080/realtime");
+```
+
+### Client Options
+
+```typescript
+const client = new DanWebSocketClient("ws://localhost:8080/ws", {
+  reconnect: {
+    enabled: true,           // Auto-reconnect on disconnect (default: true)
+    maxRetries: 10,          // 0 = unlimited retries (default: 10)
+    baseDelay: 1000,         // Initial retry delay in ms (default: 1000)
+    maxDelay: 30000,         // Max retry delay in ms (default: 30000)
+    backoffMultiplier: 2,    // Exponential backoff factor (default: 2)
+    jitter: true,            // Randomize delay +/-50% (default: true)
+  }
+});
+```
+
+---
+
 ## API Reference
 
 ### Server — Broadcast Mode

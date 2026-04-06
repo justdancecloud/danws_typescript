@@ -160,14 +160,13 @@ export class PrincipalTX {
         payload: entry.path,
       });
     }
-    if (frames.length > 0) {
-      frames.push({
-        frameType: FrameType.ServerSync,
-        keyId: 0,
-        dataType: DataType.Null,
-        payload: null,
-      });
-    }
+    // Always include ServerSync so client transitions from synchronizing to ready
+    frames.push({
+      frameType: FrameType.ServerSync,
+      keyId: 0,
+      dataType: DataType.Null,
+      payload: null,
+    });
     return frames;
   }
 
