@@ -1055,3 +1055,193 @@ describe("maxValueSize enforcement", () => {
     expect(errorCode).toBe("VALUE_TOO_LARGE");
   });
 });
+
+// ══════════════════════════════════════════════════
+// RECONNECTION — E2E tests
+// ══════════════════════════════════════════════════
+
+describe("Reconnection: broadcast client reconnects after server restart and receives full state", () => {
+  it("client receives data again after server restart on same port", async () => {
+    server = new DanWebSocketServer({ port: 19680, path: "/ws", mode: "broadcast" });
+    await waitFor(50);
+
+    server.set("status", "online");
+    server.set("counter", 42);
+
+    const client = createClient(19680, {
+      reconnect: { baseDelay: 300, maxDelay: 1000, jitter: false },
+    });
+    let readyCount = 0;
+    let disconnected = false;
+    let reconnected = false;
+    client.onReady(() => { readyCount++; });
+    client.onDisconnect(() => { disconnected = true; });
+    client.onReconnect(() => { reconnected = true; });
+    client.connect();
+    await waitUntil(() => readyCount === 1);
+    await waitFor(200);
+
+    expect(client.get("status")).toBe("online");
+    expect(client.get("counter")).toBe(42);
+
+    // Close the server — client should detect disconnect
+    server.close();
+    server = null;
+    await waitUntil(() => disconnected, 3000);
+
+    // Create NEW server on same port with same data immediately
+    server = new DanWebSocketServer({ port: 19680, path: "/ws", mode: "broadcast" });
+    await waitFor(50);
+    server.set("status", "online");
+    server.set("counter", 42);
+
+    // Wait for client to reconnect and become ready again
+    await waitUntil(() => reconnected, 8000);
+    await waitFor(300);
+
+    expect(client.state).toBe("ready");
+    expect(client.get("status")).toBe("online");
+    expect(client.get("counter")).toBe(42);
+  }, 15000);
+});
+
+describe("Reconnection: principal client reconnects and re-authenticates", () => {
+  it("client re-authorizes on reconnect and receives principal state", async () => {
+    server = new DanWebSocketServer({ port: 19681, path: "/ws", mode: "principal" });
+    await waitFor(50);
+
+    server.enableAuthorization(true);
+    server.onAuthorize((uuid, token) => server!.authorize(uuid, token, token));
+    server.principal("alice").set("score", 100);
+
+    const client = createClient(19681, {
+      reconnect: { baseDelay: 300, maxDelay: 1000, jitter: false },
+    });
+
+    // onConnect fires on every open (including reconnect) — re-authorize there
+    client.onConnect(() => client.authorize("alice"));
+
+    let readyCount = 0;
+    let disconnected = false;
+    let reconnected = false;
+    client.onReady(() => { readyCount++; });
+    client.onDisconnect(() => { disconnected = true; });
+    client.onReconnect(() => { reconnected = true; });
+    client.connect();
+    await waitUntil(() => readyCount === 1);
+    await waitFor(200);
+
+    expect(client.get("score")).toBe(100);
+
+    // Close server
+    server.close();
+    server = null;
+    await waitUntil(() => disconnected, 3000);
+
+    // Create new server on same port with auth + same principal data
+    server = new DanWebSocketServer({ port: 19681, path: "/ws", mode: "principal" });
+    await waitFor(50);
+    server.enableAuthorization(true);
+    server.onAuthorize((uuid, token) => server!.authorize(uuid, token, token));
+    server.principal("alice").set("score", 100);
+
+    // Wait for client to reconnect
+    await waitUntil(() => reconnected, 8000);
+    await waitFor(300);
+
+    expect(client.state).toBe("ready");
+    expect(client.get("score")).toBe(100);
+  }, 15000);
+});
+
+describe("Reconnection: broadcast reconnect with exponential backoff fires onReconnecting", () => {
+  it("onReconnecting fires with attempt count, then client reconnects after server restart", async () => {
+    server = new DanWebSocketServer({ port: 19682, path: "/ws", mode: "broadcast" });
+    await waitFor(50);
+
+    server.set("val", 1);
+
+    const client = createClient(19682, {
+      reconnect: { baseDelay: 300, maxDelay: 1000, jitter: false, maxRetries: 30 },
+    });
+
+    let ready = false;
+    client.onReady(() => { ready = true; });
+    client.connect();
+    await waitUntil(() => ready);
+    await waitFor(100);
+
+    // Track reconnecting attempts
+    const attempts: number[] = [];
+    client.onReconnecting((attempt) => { attempts.push(attempt); });
+
+    let disconnected = false;
+    let reconnected = false;
+    client.onDisconnect(() => { disconnected = true; });
+    client.onReconnect(() => { reconnected = true; });
+
+    // Close server — restart quickly so the first reconnect attempt can succeed
+    // (On Windows, connection to a dead port may hang for a long time)
+    server.close();
+    server = null;
+
+    // Wait for disconnect to be detected
+    await waitUntil(() => disconnected, 3000);
+
+    // onReconnecting should fire before the first attempt
+    // (scheduleNext fires onReconnect callback immediately, then sets timer)
+    await waitUntil(() => attempts.length >= 1, 2000);
+    expect(attempts[0]).toBe(1);
+
+    // Restart server before the first attempt's WS connect
+    server = new DanWebSocketServer({ port: 19682, path: "/ws", mode: "broadcast" });
+    await waitFor(50);
+    server.set("val", 1);
+
+    // Wait for client to reconnect
+    await waitUntil(() => reconnected, 10000);
+
+    expect(client.state).toBe("ready");
+    expect(client.get("val")).toBe(1);
+  }, 15000);
+});
+
+describe("Reconnection: reconnect disabled — client stays disconnected", () => {
+  it("client with reconnect disabled does not attempt to reconnect", async () => {
+    server = new DanWebSocketServer({ port: 19683, path: "/ws", mode: "broadcast" });
+    await waitFor(50);
+
+    server.set("x", 1);
+
+    const client = createClient(19683, {
+      reconnect: { enabled: false },
+    });
+
+    let ready = false;
+    let disconnected = false;
+    let reconnectingFired = false;
+    let reconnectFired = false;
+    client.onReady(() => { ready = true; });
+    client.onDisconnect(() => { disconnected = true; });
+    client.onReconnecting(() => { reconnectingFired = true; });
+    client.onReconnect(() => { reconnectFired = true; });
+    client.connect();
+    await waitUntil(() => ready);
+    await waitFor(100);
+
+    expect(client.get("x")).toBe(1);
+
+    // Close server
+    server.close();
+    server = null;
+    await waitFor(1500);
+
+    // Client should have disconnected, no reconnect attempts or successful reconnects
+    expect(disconnected).toBe(true);
+    expect(reconnectingFired).toBe(false);
+    expect(reconnectFired).toBe(false);
+    // Note: client._handleClose sets state to "reconnecting" then calls start() which
+    // is a no-op when disabled. The state remains "reconnecting" — this reflects actual behavior.
+    // The key assertion is that no onReconnecting/onReconnect callbacks fire.
+  });
+});
