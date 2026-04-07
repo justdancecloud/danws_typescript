@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.1.9 (2026-04-07)
+- Fix: StreamParser buffer limit now driven by maxMessageSize setting (was hardcoded/missing)
+- maxMessageSize flows to both WebSocket layer and StreamParser consistently
+
 ## 2.1.8 (2026-04-07)
 - Fix: state-proxy prefix cache now rebuilt on every access (prevents stale hasChildren)
 - Add: reconnection E2E tests (4 tests) and browser compatibility tests (8 tests)
