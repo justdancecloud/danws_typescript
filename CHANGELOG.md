@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.1.3 (2026-04-07)
+- Refactor: PrincipalTX and TopicPayload fully migrated to FlatStateManager
+- Fix: non-flatten value type change now triggers resync correctly
+- Refactor: UUID helpers unified (auth-controller exports, server dedup removed)
+- Refactor: _processTopicSync single-pass key classification (no double regex)
+- Fix: params comparison uses shallowEqual instead of JSON.stringify
+- Fix: TopicHandle/TopicClientHandle log callback errors instead of empty catch
+
 ## 2.1.2 (2026-04-07)
 - Refactor: extract FlatStateManager for Session (eliminates ~130 lines of duplicated set/get/clear)
 - Refactor: unify isSignalFrame/isKeyRegistrationFrame into types.ts (single source of truth)
