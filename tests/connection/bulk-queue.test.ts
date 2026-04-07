@@ -30,10 +30,11 @@ describe("BulkQueue", () => {
     vi.advanceTimersByTime(1);
     expect(flushed).toHaveLength(1);
 
-    // Verify the flushed data is a valid encoded batch
+    // Verify the flushed data is a valid encoded batch (+1 for SERVER_FLUSH_END)
     const frames = decode(flushed[0]);
-    expect(frames).toHaveLength(1);
+    expect(frames).toHaveLength(2);
     expect(frames[0].payload).toBe(42);
+    expect(frames[1].frameType).toBe(FrameType.ServerFlushEnd);
   });
 
   it("deduplicates value frames per keyId", () => {
@@ -47,7 +48,7 @@ describe("BulkQueue", () => {
 
     vi.advanceTimersByTime(100);
     const frames = decode(flushed[0]);
-    expect(frames).toHaveLength(1);
+    expect(frames).toHaveLength(2); // 1 deduped value + FLUSH_END
     expect(frames[0].payload).toBe(30); // Only latest
   });
 
@@ -61,7 +62,7 @@ describe("BulkQueue", () => {
 
     vi.advanceTimersByTime(100);
     const frames = decode(flushed[0]);
-    expect(frames).toHaveLength(2);
+    expect(frames).toHaveLength(3); // 2 sync + FLUSH_END
   });
 
   it("mixes value and non-value frames", () => {
@@ -75,7 +76,7 @@ describe("BulkQueue", () => {
 
     vi.advanceTimersByTime(100);
     const frames = decode(flushed[0]);
-    expect(frames).toHaveLength(3); // 1 sync + 2 values
+    expect(frames).toHaveLength(4); // 1 sync + 2 values + FLUSH_END
   });
 
   it("does not send if queue is empty at fire time", () => {

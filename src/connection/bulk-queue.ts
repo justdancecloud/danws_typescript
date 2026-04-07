@@ -1,3 +1,4 @@
+import { FrameType, DataType } from "../protocol/types.js";
 import type { Frame } from "../protocol/types.js";
 import { encodeBatch } from "../protocol/codec.js";
 
@@ -45,6 +46,12 @@ export class BulkQueue {
     this.valueFrames.clear();
 
     if (frames.length === 0) return;
+
+    // Append SERVER_FLUSH_END as batch boundary signal
+    frames.push({
+      frameType: FrameType.ServerFlushEnd,
+      keyId: 0, dataType: DataType.Null, payload: null,
+    });
 
     if (this._onFlush) {
       const data = encodeBatch(frames);

@@ -338,11 +338,6 @@ export class DanWebSocketClient {
             for (const cb of this._onReceive) {
               try { cb(entry.path, frame.payload); } catch (e) { this._log("onReceive callback error", e as Error); }
             }
-            // Fire onUpdate with Proxy-based state view
-            if (this._onUpdate.length > 0) {
-              const view = createStateProxy((k) => this.get(k), () => this.keys);
-              for (const cb of this._onUpdate) { try { cb(view); } catch (e) { this._log("onUpdate callback error", e as Error); } }
-            }
           }
         }
 
@@ -412,10 +407,6 @@ export class DanWebSocketClient {
             for (const cb of this._onReceive) {
               try { cb(prefix + ".length", newLength); } catch (e) { this._log("onReceive callback error", e as Error); }
             }
-            if (this._onUpdate.length > 0) {
-              const view = createStateProxy((k) => this.get(k), () => this.keys);
-              for (const cb of this._onUpdate) { try { cb(view); } catch (e) { this._log("onUpdate callback error", e as Error); } }
-            }
           }
         }
         break;
@@ -468,10 +459,17 @@ export class DanWebSocketClient {
             for (const cb of this._onReceive) {
               try { cb(prefix + ".length", currentLength); } catch (e) { this._log("onReceive callback error", e as Error); }
             }
-            if (this._onUpdate.length > 0) {
-              const view = createStateProxy((k) => this.get(k), () => this.keys);
-              for (const cb of this._onUpdate) { try { cb(view); } catch (e) { this._log("onUpdate callback error", e as Error); } }
-            }
+          }
+        }
+        break;
+      }
+
+      case FrameType.ServerFlushEnd: {
+        // Batch boundary — fire onUpdate once for the entire flush
+        if (this._onUpdate.length > 0) {
+          const view = createStateProxy((k) => this.get(k), () => this.keys);
+          for (const cb of this._onUpdate) {
+            try { cb(view); } catch (e) { this._log("onUpdate callback error", e as Error); }
           }
         }
         break;

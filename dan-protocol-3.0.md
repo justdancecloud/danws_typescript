@@ -1,4 +1,4 @@
-# DanProtocol v3.2 Specification
+# DanProtocol v3.3 Specification
 
 > April 2026 | Real-Time State Synchronization with Auto-Flatten & Array Operations
 
@@ -94,6 +94,22 @@ Sent every 10 seconds by both sides. If not received within 15 seconds, the conn
 | `0x0A` | ClientResyncReq | C→S | — |
 | `0x0B` | ClientReset | C→S | — |
 | `0x0C` | ServerResyncReq | S→C | — |
+
+### 3.5 Batch Boundary
+
+| Code | Name | Direction | Payload |
+|------|------|-----------|---------|
+| `0xFF` | ServerFlushEnd | S→C | — |
+
+**SERVER_FLUSH_END (0xFF):**
+
+Sent automatically at the end of every BulkQueue flush batch. This signal tells the client that all frames in this batch have been delivered, and the client's state is now consistent with the server at this point in time.
+
+- **Purpose**: Prevents render storms. Without this, `onReceive` fires per-frame causing N re-renders per batch. With `ServerFlushEnd`, the client fires `onUpdate` exactly once per batch.
+- **Client behavior**:
+  - `onReceive(key, value)` — fires per individual `ServerValue` frame (fine-grained, per-key)
+  - `onUpdate(state)` — fires once when `ServerFlushEnd` is received (batch-level, for rendering)
+- **Timing**: Appended to every BulkQueue flush (default every 100ms). Initial sync values also go through BulkQueue, so the first `onUpdate` fires after the initial data is fully loaded.
 
 ### 3.6 Array Operations
 

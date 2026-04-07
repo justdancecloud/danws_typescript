@@ -61,7 +61,8 @@ export function createStreamParser(): StreamParser {
       frameType === FrameType.ClientResyncReq ||
       frameType === FrameType.ClientReset ||
       frameType === FrameType.ServerResyncReq ||
-      frameType === FrameType.AuthOk
+      frameType === FrameType.AuthOk ||
+      frameType === FrameType.ServerFlushEnd
     ) {
       payload = null;
     } else {

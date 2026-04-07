@@ -40,6 +40,7 @@ export enum FrameType {
   AuthFail = 0x11,
   ArrayShiftLeft = 0x20,
   ArrayShiftRight = 0x21,
+  ServerFlushEnd = 0xff,
 }
 
 export interface Frame {

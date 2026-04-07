@@ -157,6 +157,7 @@ function isSignalFrame(ft: FrameType): boolean {
     ft === FrameType.ClientResyncReq ||
     ft === FrameType.ClientReset ||
     ft === FrameType.ServerResyncReq ||
-    ft === FrameType.AuthOk
+    ft === FrameType.AuthOk ||
+    ft === FrameType.ServerFlushEnd
   );
 }

@@ -125,6 +125,7 @@ import { DanWebSocketClient } from "dan-websocket";
 
 const client = new DanWebSocketClient("ws://localhost:8080");
 
+// onUpdate fires once per server flush batch (~100ms) — ideal for rendering
 client.onUpdate((state) => {
   // Object access via Proxy
   console.log(state.server.status);       // "online"
@@ -583,8 +584,8 @@ const client = new DanWebSocketClient("ws://localhost:8080/ws", {
 | Event | Callback |
 |-------|----------|
 | `client.onReady(cb)` | Initial sync complete |
-| `client.onReceive((key, value) => {})` | Per key change |
-| `client.onUpdate((state) => {})` | Any change, Proxy state view |
+| `client.onReceive((key, value) => {})` | Per key change (per frame) |
+| `client.onUpdate((state) => {})` | Per flush batch — use for rendering (fires once per ~100ms batch) |
 | `client.topic(name).onReceive((key, value) => {})` | Per key in topic |
 | `client.topic(name).onUpdate((payload) => {})` | Any change in topic, Proxy view |
 | `client.onConnect(cb)` / `onDisconnect(cb)` / `onError(cb)` | Connection events |
