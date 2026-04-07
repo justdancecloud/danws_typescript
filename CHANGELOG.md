@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.1.0 (2026-04-07)
+- **Protocol v3.3**: SERVER_FLUSH_END (0xFF) batch boundary frame
+- **Batch-level `onUpdate`**: fires once per BulkQueue flush (~100ms) instead of per-frame — prevents render storms
+- `onReceive` remains per-frame for fine-grained key-level listeners
+- BulkQueue automatically appends SERVER_FLUSH_END at the end of every flush
+- Protocol document updated to v3.3
+
+## 2.0.1 (2026-04-07)
+- Fix: Redundant full sync — server ignores CLIENT_READY when already in READY state
+- Fix: Client only sends CLIENT_READY when state !== "ready" (prevents periodic full transmission)
+- Fix: Heartbeat double-send removed — server no longer echoes heartbeat on receive
+- Add: Frame count verification in README with actual E2E test results
+
 ## 2.0.0 (2026-04-06)
 - **Protocol v3.2**: ARRAY_SHIFT_LEFT (0x20) and ARRAY_SHIFT_RIGHT (0x21) frame types
 - **Auto array diff detection**: shift, append, pop patterns detected automatically
