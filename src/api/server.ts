@@ -332,8 +332,8 @@ export class DanWebSocketServer {
       if (!identified) {
         if (frame.frameType !== FrameType.Identify) { ws.close(); return; }
         const payload = frame.payload;
-        if (payload instanceof Uint8Array && payload.length === 16) {
-          clientUuid = bytesToUuid(payload);
+        if (payload instanceof Uint8Array && (payload.length === 16 || payload.length === 18)) {
+          clientUuid = bytesToUuid(payload.subarray(0, 16));
         } else { ws.close(); return; }
 
         identified = true;

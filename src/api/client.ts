@@ -488,6 +488,10 @@ export class DanWebSocketClient {
             try { cb(view); } catch (e) { this._log("onUpdate callback error", e as Error); }
           }
         }
+        // Flush topic-level onUpdate callbacks
+        for (const handle of this._topicClientHandles.values()) {
+          handle._flushUpdate();
+        }
         break;
       }
 

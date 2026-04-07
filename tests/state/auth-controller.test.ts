@@ -144,7 +144,11 @@ describe("AuthController", () => {
     it("buildIdentifyFrame", () => {
       const frame = AuthController.buildIdentifyFrame("019abcde-f012-7000-8000-000000000001");
       expect(frame.frameType).toBe(FrameType.Identify);
-      expect(frame.payload).toEqual(sampleUuidBytes);
+      const payload = frame.payload as Uint8Array;
+      expect(payload.length).toBe(18); // 16 UUID + 2 version
+      expect(payload.subarray(0, 16)).toEqual(sampleUuidBytes);
+      expect(payload[16]).toBe(AuthController.PROTOCOL_VERSION[0]); // major
+      expect(payload[17]).toBe(AuthController.PROTOCOL_VERSION[1]); // minor
     });
 
     it("buildAuthFrame", () => {

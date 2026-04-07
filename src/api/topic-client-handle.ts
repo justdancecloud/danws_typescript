@@ -58,11 +58,20 @@ export class TopicClientHandle {
     return () => { const i = this._onUpdate.indexOf(cb); if (i !== -1) this._onUpdate.splice(i, 1); };
   }
 
-  /** @internal — fire callbacks for a key update */
+  private _dirty = false;
+
+  /** @internal — fire onReceive per-frame, mark dirty for batch onUpdate */
   _notify(userKey: string, value: unknown): void {
     for (const cb of this._onReceive) {
       try { cb(userKey, value); } catch {}
     }
+    this._dirty = true;
+  }
+
+  /** @internal — fire onUpdate if dirty (called on SERVER_FLUSH_END) */
+  _flushUpdate(): void {
+    if (!this._dirty || this._onUpdate.length === 0) return;
+    this._dirty = false;
     const view = this._createPayloadView();
     for (const cb of this._onUpdate) {
       try { cb(view); } catch {}

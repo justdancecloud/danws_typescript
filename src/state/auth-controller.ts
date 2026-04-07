@@ -37,8 +37,12 @@ export class AuthController {
     return this._phase === "authorized";
   }
 
+  private _protocolVersion: [number, number] = [0, 0];
+
+  get protocolVersion(): [number, number] { return this._protocolVersion; }
+
   /**
-   * Process IDENTIFY frame. Extracts the 16-byte UUIDv7.
+   * Process IDENTIFY frame. Extracts the 16-byte UUIDv7 + optional 2-byte protocol version.
    * Returns true if IDENTIFY was valid.
    */
   handleIdentify(payload: Uint8Array): boolean {
@@ -46,12 +50,17 @@ export class AuthController {
       return false;
     }
 
-    if (payload.length !== 16) {
+    if (payload.length !== 16 && payload.length !== 18) {
       return false;
     }
 
-    // Convert 16 bytes to UUID string format
-    this._clientUuid = bytesToUuid(payload);
+    // Convert first 16 bytes to UUID string format
+    this._clientUuid = bytesToUuid(payload.subarray(0, 16));
+
+    // Extract protocol version if present (bytes 16-17)
+    if (payload.length >= 18) {
+      this._protocolVersion = [payload[16], payload[17]];
+    }
 
     if (this.config.required) {
       this._phase = "awaiting_auth";
@@ -108,15 +117,24 @@ export class AuthController {
 
   // ──── Client side ────
 
+  /** Current protocol version: 3.3 → major=3, minor=3. */
+  static readonly PROTOCOL_VERSION = [3, 3] as const;
+
   /**
    * Build IDENTIFY frame from UUID string.
+   * Payload: 16-byte UUID + 2-byte protocol version (major, minor).
    */
   static buildIdentifyFrame(uuid: string): Frame {
+    const uuidBytes = uuidToBytes(uuid);
+    const payload = new Uint8Array(18);
+    payload.set(uuidBytes, 0);
+    payload[16] = AuthController.PROTOCOL_VERSION[0];
+    payload[17] = AuthController.PROTOCOL_VERSION[1];
     return {
       frameType: FrameType.Identify,
       keyId: 0,
       dataType: DataType.Binary,
-      payload: uuidToBytes(uuid),
+      payload,
     };
   }
 
