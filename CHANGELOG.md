@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.2.0 (2026-04-07) — Stable Release
+
+First stable release. All 4 modes fully tested and documented.
+
+**Features:**
+- `maxMessageSize` (default 1MB) — WebSocket + StreamParser buffer limit, configurable
+- `maxValueSize` (default 64KB) — per-value size limit with VALUE_TOO_LARGE error
+- `debug` option / `setDebug()` — injectable debug logger for callback errors
+- `stripInternal` — @internal methods hidden from .d.ts type definitions
+
+**Bug Fixes:**
+- State Proxy prefix cache rebuilt on every access (prevents stale data)
+- StreamParser buffer bounded by maxMessageSize (prevents OOM)
+
+**Tests:**
+- 313 tests across 21 files (broadcast, principal, session_topic, session_principal_topic)
+- Reconnection E2E tests (server restart, re-auth, backoff, disabled)
+- Browser compatibility tests (globalThis.WebSocket, Proxy, NO_WEBSOCKET)
+
+**Documentation:**
+- SECURITY.md — vulnerability reporting, security design
+- CONTRIBUTING.md — dev setup, PR process, code style
+- docs/architecture.md — layer diagram, data flow, connection lifecycle
+- docs/migration.md — version migration guides
+
 ## 2.1.9 (2026-04-07)
 - Fix: StreamParser buffer limit now driven by maxMessageSize setting (was hardcoded/missing)
 - maxMessageSize flows to both WebSocket layer and StreamParser consistently
