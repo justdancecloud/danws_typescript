@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.1.1 (2026-04-07)
+- Refactor: extract shared array-diff utility (~845 lines removed)
+- Remove unused HandshakeController and OfflineQueue
+- Fix ReconnectEngine: timer now triggers connect() automatically
+- Fix `_topicDirty`: flush pending topic subscriptions on reconnect
+- TopicClientHandle.onUpdate now fires per-flush batch (not per-frame)
+- IDENTIFY frame includes protocol version (v3.3), backward-compatible with 16-byte
+
 ## 2.1.0 (2026-04-07)
 - **Protocol v3.3**: SERVER_FLUSH_END (0xFF) batch boundary frame
 - **Batch-level `onUpdate`**: fires once per BulkQueue flush (~100ms) instead of per-frame — prevents render storms
