@@ -43,6 +43,9 @@ export class DanWebSocketSession {
   private _topicIndex = 0;
   private _topics = new Map<string, TopicInfo>(); // backward compat
 
+  // ──── Debug logging ────
+  private _debug: boolean | ((msg: string, err?: Error) => void) = false;
+
   constructor(clientUuid: string) {
     this.id = clientUuid;
   }
@@ -118,6 +121,11 @@ export class DanWebSocketSession {
   }
 
   // ──── Internal methods ────
+
+  /** @internal */
+  _setDebug(debug: boolean | ((msg: string, err?: Error) => void)): void {
+    this._debug = debug;
+  }
 
   /** @internal */
   _setEnqueue(fn: (frame: Frame) => void): void {
@@ -244,7 +252,7 @@ export class DanWebSocketSession {
     if (this._sessionEnqueue) {
       payload._bind(this._sessionEnqueue, () => this._triggerSessionResync());
     }
-    const handle = new TopicHandle(name, params, payload, this);
+    const handle = new TopicHandle(name, params, payload, this, (msg, err) => this._log(msg, err));
     this._topicHandles.set(name, handle);
     // Also maintain backward compat topics map
     this._topics.set(name, { name, params });
@@ -321,10 +329,15 @@ export class DanWebSocketSession {
     return () => { const i = arr.indexOf(cb); if (i !== -1) arr.splice(i, 1); };
   }
 
+  private _log(msg: string, err?: Error): void {
+    if (typeof this._debug === "function") this._debug(msg, err);
+    else if (this._debug) console.warn(`[dan-ws session] ${msg}`, err ?? "");
+  }
+
   private _emit<T extends unknown[]>(callbacks: Array<(...args: T) => void>, ...args: T): void {
     for (const cb of callbacks) {
       try { cb(...args); } catch (e) {
-        if (typeof console !== "undefined") console.warn("[dan-ws session] callback error", e);
+        this._log("callback error", e as Error);
       }
     }
   }

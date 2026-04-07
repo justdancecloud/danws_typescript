@@ -14,12 +14,14 @@ export class TopicClientHandle {
 
   private _onReceive: Array<(key: string, value: unknown) => void> = [];
   private _onUpdate: Array<(payload: TopicClientPayloadView) => void> = [];
+  private _log: ((msg: string, err?: Error) => void) | null;
 
-  constructor(name: string, index: number, registry: KeyRegistry, storeGet: (keyId: number) => unknown) {
+  constructor(name: string, index: number, registry: KeyRegistry, storeGet: (keyId: number) => unknown, log?: (msg: string, err?: Error) => void) {
     this.name = name;
     this._index = index;
     this._registry = registry;
     this._storeGet = storeGet;
+    this._log = log ?? null;
   }
 
   get(key: string): unknown {
@@ -63,7 +65,7 @@ export class TopicClientHandle {
   /** @internal — fire onReceive per-frame, mark dirty for batch onUpdate */
   _notify(userKey: string, value: unknown): void {
     for (const cb of this._onReceive) {
-      try { cb(userKey, value); } catch (e) { console.warn("[dan-ws] topic onReceive error", e); }
+      try { cb(userKey, value); } catch (e) { if (this._log) this._log("topic onReceive error", e as Error); }
     }
     this._dirty = true;
   }
@@ -74,7 +76,7 @@ export class TopicClientHandle {
     this._dirty = false;
     const view = this._createPayloadView();
     for (const cb of this._onUpdate) {
-      try { cb(view); } catch (e) { console.warn("[dan-ws] topic onUpdate error", e); }
+      try { cb(view); } catch (e) { if (this._log) this._log("topic onUpdate error", e as Error); }
     }
   }
 

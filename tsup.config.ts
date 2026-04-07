@@ -5,6 +5,7 @@ const shared = {
   dts: {
     compilerOptions: {
       ignoreDeprecations: "6.0",
+      stripInternal: true,
     },
   },
 };

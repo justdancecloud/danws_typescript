@@ -47,6 +47,8 @@ DanProtocol is a **lightweight binary protocol** designed for pushing real-time 
 - **Minimum frame**: 10 bytes (signal frame: 2 framing + 6 body + 2 framing)
 - **DLE escaping**: Any `0x10` in the body becomes `0x10 0x10`
 
+Signal frames MUST set DataType to `0x00` (Null). Receivers SHOULD ignore this field for signal frames.
+
 ### 2.3 Heartbeat (not a frame)
 
 ```
@@ -111,7 +113,22 @@ Sent automatically at the end of every BulkQueue flush batch. This signal tells 
   - `onUpdate(state)` — fires once when `ServerFlushEnd` is received (batch-level, for rendering)
 - **Timing**: Appended to every BulkQueue flush (default every 100ms). Initial sync values also go through BulkQueue, so the first `onUpdate` fires after the initial data is fully loaded.
 
-### 3.6 Array Operations
+### 3.6 Authentication
+
+| Code | Name | Direction | Payload |
+|------|------|-----------|---------|
+| `0x0D` | Identify | C→S | 16-byte UUIDv7 (+ optional 2-byte version) |
+| `0x0E` | Auth | C→S | UTF-8 token |
+| `0x0F` | AuthOk | S→C | — |
+| `0x11` | AuthFail | S→C | UTF-8 reason |
+
+**IDENTIFY (0x0D) Payload Format:**
+
+Payload: 16-byte UUIDv7 + optional 2-byte protocol version (major, minor). Servers accepting 18-byte payload extract version; 16-byte payload is treated as version 0.0.
+
+> **Note**: `0x10` is reserved (DLE control character). AuthFail uses `0x11` to avoid collision.
+
+### 3.7 Array Operations
 
 | Code | Name | Direction | Payload |
 |------|------|-----------|---------|
@@ -197,17 +214,6 @@ DLE STX  =0x20     =0x06         shiftCount=1
 |  |  FrameType   DataType=Int32
 DLE STX  =0x21     =0x06         shiftCount=1
 ```
-
-### 3.5 Authentication
-
-| Code | Name | Direction | Payload |
-|------|------|-----------|---------|
-| `0x0D` | Identify | C→S | 16 bytes UUIDv7 |
-| `0x0E` | Auth | C→S | UTF-8 token |
-| `0x0F` | AuthOk | S→C | — |
-| `0x11` | AuthFail | S→C | UTF-8 reason |
-
-> **Note**: `0x10` is reserved (DLE control character). AuthFail uses `0x11` to avoid collision.
 
 ---
 

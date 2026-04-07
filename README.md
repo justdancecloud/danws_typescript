@@ -5,7 +5,7 @@
 [![npm](https://img.shields.io/npm/v/dan-websocket)](https://www.npmjs.com/package/dan-websocket)
 [![Maven Central](https://img.shields.io/maven-central/v/io.github.justdancecloud/dan-websocket)](https://central.sonatype.com/artifact/io.github.justdancecloud/dan-websocket)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-286%20passing-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-265%20passing-brightgreen)]()
 
 ```
 npm install dan-websocket
@@ -92,7 +92,7 @@ When a chart array shifts by 1 (`[a,b,c,d] -> [b,c,d,e]`), dan-websocket sends *
 
 |  | **dan-websocket** | **Socket.IO** | **Firebase RTDB** | **Ably** |
 |---|---|---|---|---|
-| Protocol | Binary (DanProtocol v3.2) | JSON text, Engine.IO + Socket.IO double-wrapped | JSON (internal protocol) | MessagePack / JSON |
+| Protocol | Binary (DanProtocol v3.3) | JSON text, Engine.IO + Socket.IO double-wrapped | JSON (internal protocol) | MessagePack / JSON |
 | **bool update** | **~13 bytes** | ~50-70 bytes | ~80-120 bytes | ~60-90 bytes |
 | **100 fields, 1 changed** | **~13 bytes** | **~several KB** (entire object re-sent) | ~100-200 bytes (changed path + subtree) | **~several KB** (entire message re-sent) |
 | **Array shift (1000 items)** | **1 shift frame + new items** | **entire array re-sent** | **entire subtree** | **entire array re-sent** |
@@ -463,7 +463,7 @@ server.topic.onSubscribe((session, topic) => {
 
 | Event | When |
 |-------|------|
-| `EventType.SubscribedEvent` | Client first subscribes |
+| `EventType.SubscribeEvent` | Client first subscribes |
 | `EventType.ChangedParamsEvent` | Client calls `setParams()` |
 | `EventType.DelayedTaskEvent` | Timer fires (from `setDelayedTask`) |
 
@@ -693,13 +693,13 @@ dan-websocket v2.0 includes multiple layers of optimization:
 | **TypeScript** | [`dan-websocket`](https://www.npmjs.com/package/dan-websocket) | `npm install dan-websocket` |
 | **Java** | [`io.github.justdancecloud:dan-websocket`](https://central.sonatype.com/artifact/io.github.justdancecloud/dan-websocket) | Gradle / Maven |
 
-Wire-compatible. A TypeScript server can serve Java clients and vice versa. Both implement DanProtocol v3.2, including ARRAY_SHIFT frames.
+Wire-compatible. A TypeScript server can serve Java clients and vice versa. Both implement DanProtocol v3.3, including ARRAY_SHIFT frames.
 
 ---
 
 ## Protocol
 
-dan-websocket uses **DanProtocol v3.2** — a binary, DLE-framed protocol designed for minimal bandwidth and self-synchronizing streams.
+dan-websocket uses **DanProtocol v3.3** — a binary, DLE-framed protocol designed for minimal bandwidth and self-synchronizing streams.
 
 Key protocol features:
 - **DLE-based framing** — no length prefixes, robust on unreliable streams
@@ -708,7 +708,38 @@ Key protocol features:
 - **ARRAY_SHIFT_LEFT (0x20)** and **ARRAY_SHIFT_RIGHT (0x21)** — array shift optimization frames
 - Heartbeat with 10s interval, 15s timeout
 
-See [dan-protocol-3.0.md](./dan-protocol-3.0.md) for the full specification.
+See [dan-protocol.md](./dan-protocol.md) for the full specification.
+
+---
+
+## Error Codes
+
+All errors are instances of `DanWSError` with a `code` property:
+
+```typescript
+client.onError((err) => {
+  console.log(err.code);    // "AUTH_REJECTED"
+  console.log(err.message); // "Token invalid"
+});
+```
+
+| Code | Where | Description |
+|------|-------|-------------|
+| `HEARTBEAT_TIMEOUT` | Client | No heartbeat from server within 15s |
+| `RECONNECT_EXHAUSTED` | Client | All reconnection attempts failed |
+| `AUTH_REJECTED` | Client | Server rejected the auth token |
+| `UNKNOWN_KEY_ID` | Client | Received value for unregistered key |
+| `REMOTE_ERROR` | Client/Session | Error frame from remote peer |
+| `NO_WEBSOCKET` | Client | No WebSocket implementation found (install `ws` for Node.js) |
+| `INVALID_OPTIONS` | Server | Invalid constructor options (e.g., both `port` and `server`) |
+| `INVALID_MODE` | Server/Session | API call not available in current mode |
+| `INVALID_KEY_PATH` | Internal | Key path empty, invalid chars, or exceeds 200 bytes |
+| `DUPLICATE_KEY_PATH` | Internal | Key path already registered |
+| `IDENTIFY_INVALID` | Internal | Client IDENTIFY payload malformed |
+| `INVALID_VALUE_TYPE` | Internal | Value type mismatch for declared DataType |
+| `UNKNOWN_DATA_TYPE` | Internal | Unrecognized DataType byte |
+| `FRAME_PARSE_ERROR` | Internal | Malformed binary frame |
+| `INVALID_DLE_SEQUENCE` | Internal | Invalid DLE escape sequence in wire data |
 
 ---
 

@@ -39,9 +39,13 @@ interface InternalSession {
 const BROADCAST_PRINCIPAL = "__broadcast__";
 
 // Topic namespace object
-interface TopicNamespace {
+export interface TopicNamespace {
   onSubscribe(cb: (session: DanWebSocketSession, topic: TopicHandle) => void): void;
   onUnsubscribe(cb: (session: DanWebSocketSession, topic: TopicHandle) => void): void;
+}
+
+/** @internal */
+interface TopicNamespaceInternal extends TopicNamespace {
   _onSubscribeCbs: Array<(session: DanWebSocketSession, topic: TopicHandle) => void>;
   _onUnsubscribeCbs: Array<(session: DanWebSocketSession, topic: TopicHandle) => void>;
 }
@@ -89,7 +93,7 @@ export class DanWebSocketServer {
     this._flushIntervalMs = options.flushIntervalMs;
 
     // Topic namespace
-    const ns: TopicNamespace = {
+    const ns: TopicNamespaceInternal = {
       _onSubscribeCbs: [],
       _onUnsubscribeCbs: [],
       onSubscribe(cb) { ns._onSubscribeCbs.push(cb); },
@@ -409,6 +413,7 @@ export class DanWebSocketServer {
     }
 
     const session = new DanWebSocketSession(clientUuid);
+    session._setDebug(this._debug);
     const bulkQueue = new BulkQueue(this._flushIntervalMs);
     const heartbeat = new HeartbeatManager();
     const authController = new AuthController({ required: this._authEnabled, timeout: this._authTimeout });
@@ -536,7 +541,7 @@ export class DanWebSocketServer {
         // Fire new API callbacks
         const handle = session.getTopicHandle(oldName);
         if (handle) {
-          for (const cb of this.topic._onUnsubscribeCbs) { try { cb(session, handle); } catch (e) { this._log("topic.onUnsubscribe callback error", e as Error); } }
+          for (const cb of (this.topic as TopicNamespaceInternal)._onUnsubscribeCbs) { try { cb(session, handle); } catch (e) { this._log("topic.onUnsubscribe callback error", e as Error); } }
         }
         // Fire backward compat callbacks
         for (const cb of this._onTopicUnsubscribe) { try { cb(session, oldName); } catch (e) { this._log("onTopicUnsubscribe callback error", e as Error); } }
@@ -556,7 +561,7 @@ export class DanWebSocketServer {
         const clientIdx = nameToIndex.get(name) ?? session._nextTopicIndex;
         const handle = session._createTopicHandle(name, params, clientIdx);
         // Fire new API callbacks
-        for (const cb of this.topic._onSubscribeCbs) { try { cb(session, handle); } catch (e) { this._log("topic.onSubscribe callback error", e as Error); } }
+        for (const cb of (this.topic as TopicNamespaceInternal)._onSubscribeCbs) { try { cb(session, handle); } catch (e) { this._log("topic.onSubscribe callback error", e as Error); } }
         // Fire backward compat callbacks
         for (const cb of this._onTopicSubscribe) { try { cb(session, { name, params }); } catch (e) { this._log("onTopicSubscribe callback error", e as Error); } }
       } else {

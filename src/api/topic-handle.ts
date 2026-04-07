@@ -66,12 +66,14 @@ export class TopicHandle {
   private _session: DanWebSocketSession;
   private _delayMs: number | null = null;
   private _timer: ReturnType<typeof setInterval> | null = null;
+  private _log: ((msg: string, err?: Error) => void) | null;
 
-  constructor(name: string, params: Record<string, unknown>, payload: TopicPayload, session: DanWebSocketSession) {
+  constructor(name: string, params: Record<string, unknown>, payload: TopicPayload, session: DanWebSocketSession, log?: (msg: string, err?: Error) => void) {
     this.name = name;
     this._params = params;
     this.payload = payload;
     this._session = session;
+    this._log = log ?? null;
   }
 
   get params(): Record<string, unknown> { return this._params; }
@@ -80,9 +82,9 @@ export class TopicHandle {
     this._callback = fn;
     try {
       const r = fn(EventType.SubscribeEvent, this, this._session);
-      if (r instanceof Promise) r.catch((e) => console.warn("[dan-ws] topic callback error", e));
+      if (r instanceof Promise) r.catch((e) => { if (this._log) this._log("topic callback error", e as Error); });
     } catch (e) {
-      console.warn("[dan-ws] topic setCallback error", e);
+      if (this._log) this._log("topic setCallback error", e as Error);
     }
   }
 
@@ -93,9 +95,9 @@ export class TopicHandle {
       if (this._callback) {
         try {
           const r = this._callback(EventType.DelayedTaskEvent, this, this._session);
-          if (r instanceof Promise) r.catch((e) => console.warn("[dan-ws] delayed task error", e));
+          if (r instanceof Promise) r.catch((e) => { if (this._log) this._log("delayed task error", e as Error); });
         } catch (e) {
-          console.warn("[dan-ws] delayed task error", e);
+          if (this._log) this._log("delayed task error", e as Error);
         }
       }
     }, ms);
@@ -119,9 +121,9 @@ export class TopicHandle {
     if (this._callback) {
       try {
         const r = this._callback(EventType.ChangedParamsEvent, this, this._session);
-        if (r instanceof Promise) r.catch((e) => console.warn("[dan-ws] params change callback error", e));
+        if (r instanceof Promise) r.catch((e) => { if (this._log) this._log("params change callback error", e as Error); });
       } catch (e) {
-        console.warn("[dan-ws] params change callback error", e);
+        if (this._log) this._log("params change callback error", e as Error);
       }
     }
 

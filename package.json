@@ -1,6 +1,6 @@
 {
   "name": "dan-websocket",
-  "version": "2.1.3",
+  "version": "2.1.4",
   "description": "Lightweight binary protocol for real-time state synchronization",
   "type": "module",
   "exports": {
@@ -21,7 +21,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "dan-protocol.md"
   ],
   "scripts": {
     "build": "tsup",
@@ -45,6 +46,9 @@
   "homepage": "https://github.com/justdancecloud/danws_typescript#readme",
   "bugs": {
     "url": "https://github.com/justdancecloud/danws_typescript/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   },
   "devDependencies": {
     "@types/node": "^25.5.2",

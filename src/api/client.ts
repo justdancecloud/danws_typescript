@@ -184,7 +184,7 @@ export class DanWebSocketClient {
     let handle = this._topicClientHandles.get(name);
     if (!handle) {
       const idx = this._topicIndexMap.get(name) ?? -1;
-      handle = new TopicClientHandle(name, idx, this._registry, (id) => this._store.get(id));
+      handle = new TopicClientHandle(name, idx, this._registry, (id) => this._store.get(id), (msg, err) => this._log(msg, err));
       this._topicClientHandles.set(name, handle);
     }
     return handle;
@@ -532,7 +532,7 @@ export class DanWebSocketClient {
       // Update or create client handle with correct index
       let handle = this._topicClientHandles.get(topicName);
       if (!handle) {
-        handle = new TopicClientHandle(topicName, idx, this._registry, (id) => this._store.get(id));
+        handle = new TopicClientHandle(topicName, idx, this._registry, (id) => this._store.get(id), (msg, err) => this._log(msg, err));
         this._topicClientHandles.set(topicName, handle);
       } else {
         handle._setIndex(idx);

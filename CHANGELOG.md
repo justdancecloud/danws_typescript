@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.1.4 (2026-04-07)
+- Fix: `.d.ts` now hides `@internal` members via `stripInternal` (TopicPayload, TopicHandle, Session internals)
+- Fix: `TopicNamespace` interface no longer exposes `_onSubscribeCbs`/`_onUnsubscribeCbs` in type definitions
+- Fix: `EventType.SubscribedEvent` typo in README → `EventType.SubscribeEvent`
+- Add: DanWSError code table in README (15 error codes documented)
+- Fix: test badge count updated (265 tests)
+
 ## 2.1.3 (2026-04-07)
 - Refactor: PrincipalTX and TopicPayload fully migrated to FlatStateManager
 - Fix: non-flatten value type change now triggers resync correctly
