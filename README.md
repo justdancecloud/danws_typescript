@@ -13,6 +13,23 @@ npm install dan-websocket
 
 Also available in **Java**: [dan-websocket for Java](https://github.com/justdancecloud/danws_java)
 
+### Quick Start
+
+```typescript
+// Server
+import { DanWebSocketServer } from "dan-websocket/server";
+const server = new DanWebSocketServer({ port: 8080, mode: "broadcast" });
+server.set("price", { btc: 67000, eth: 3200 });
+
+// Client
+import { DanWebSocketClient } from "dan-websocket";
+const client = new DanWebSocketClient("ws://localhost:8080");
+client.onUpdate((data) => console.log(data.price.btc)); // 67000
+client.connect();
+```
+
+Server puts an object in. Client reads it out as an object. Between the two — binary serialization, field-level dedup, batch flush — all automatic, zero config.
+
 ---
 
 ## Why dan-websocket?
