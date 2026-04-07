@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.1.2 (2026-04-07)
+- Refactor: extract FlatStateManager for Session (eliminates ~130 lines of duplicated set/get/clear)
+- Refactor: unify isSignalFrame/isKeyRegistrationFrame into types.ts (single source of truth)
+- Fix: Session._emit logs callback errors instead of silently swallowing
+- Fix: client.connect logs connection errors for debugging
+- Fix: client.unsubscribe cleans topicClientHandles (memory leak)
+- Fix: previousArrays cleared on key deletion (memory leak, all 3 stores)
+- Rename: dan-protocol-3.0.md → dan-protocol.md
+
 ## 2.1.1 (2026-04-07)
 - Refactor: extract shared array-diff utility (~845 lines removed)
 - Remove unused HandshakeController and OfflineQueue
