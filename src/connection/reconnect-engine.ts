@@ -26,6 +26,7 @@ export class ReconnectEngine {
 
   private _onReconnect: ((attempt: number, delay: number) => void) | null = null;
   private _onExhausted: (() => void) | null = null;
+  private _onAttempt: (() => void) | null = null;
 
   constructor(options?: Partial<ReconnectOptions>) {
     this.options = { ...DEFAULT_RECONNECT_OPTIONS, ...options };
@@ -37,6 +38,11 @@ export class ReconnectEngine {
 
   onExhausted(callback: () => void): void {
     this._onExhausted = callback;
+  }
+
+  /** Called when the timer fires — the caller should attempt to reconnect. */
+  onAttempt(callback: () => void): void {
+    this._onAttempt = callback;
   }
 
   get attempt(): number {
@@ -102,9 +108,7 @@ export class ReconnectEngine {
 
     this.timer = setTimeout(() => {
       this.timer = null;
-      // The actual reconnect attempt is handled externally.
-      // After connect succeeds: call stop().
-      // After connect fails: call scheduleNext() again.
+      if (this._onAttempt) this._onAttempt();
     }, delay);
   }
 
@@ -121,48 +125,6 @@ export class ReconnectEngine {
     this.stop();
     this._onReconnect = null;
     this._onExhausted = null;
-  }
-}
-
-/**
- * Offline queue: stores latest value per key while disconnected.
- * Evicts oldest keys when size limit is exceeded.
- */
-export class OfflineQueue {
-  private queue = new Map<string, unknown>();
-  private insertOrder: string[] = [];
-  private readonly maxSize: number;
-
-  constructor(maxSize: number = 1000) {
-    this.maxSize = maxSize;
-  }
-
-  set(key: string, value: unknown): void {
-    if (!this.queue.has(key)) {
-      this.insertOrder.push(key);
-    }
-    this.queue.set(key, value);
-
-    // Evict oldest if over size
-    while (this.insertOrder.length > this.maxSize) {
-      const oldest = this.insertOrder.shift()!;
-      this.queue.delete(oldest);
-    }
-  }
-
-  get size(): number {
-    return this.queue.size;
-  }
-
-  drain(): Map<string, unknown> {
-    const result = new Map(this.queue);
-    this.queue.clear();
-    this.insertOrder = [];
-    return result;
-  }
-
-  clear(): void {
-    this.queue.clear();
-    this.insertOrder = [];
+    this._onAttempt = null;
   }
 }

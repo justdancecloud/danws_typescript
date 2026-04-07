@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { ReconnectEngine, OfflineQueue } from "../../src/connection/reconnect-engine.js";
+import { ReconnectEngine } from "../../src/connection/reconnect-engine.js";
 
 describe("ReconnectEngine", () => {
   beforeEach(() => vi.useFakeTimers());
@@ -131,62 +131,3 @@ describe("ReconnectEngine", () => {
   });
 });
 
-describe("OfflineQueue", () => {
-  it("stores latest value per key", () => {
-    const q = new OfflineQueue();
-    q.set("a", 1);
-    q.set("a", 2);
-    q.set("b", 3);
-
-    expect(q.size).toBe(2);
-
-    const drained = q.drain();
-    expect(drained.get("a")).toBe(2);
-    expect(drained.get("b")).toBe(3);
-    expect(q.size).toBe(0);
-  });
-
-  it("evicts oldest keys when exceeding maxSize", () => {
-    const q = new OfflineQueue(3);
-    q.set("a", 1);
-    q.set("b", 2);
-    q.set("c", 3);
-    q.set("d", 4); // evicts "a"
-
-    expect(q.size).toBe(3);
-    const drained = q.drain();
-    expect(drained.has("a")).toBe(false);
-    expect(drained.get("b")).toBe(2);
-    expect(drained.get("d")).toBe(4);
-  });
-
-  it("updating existing key does not count as new entry for eviction", () => {
-    const q = new OfflineQueue(2);
-    q.set("a", 1);
-    q.set("b", 2);
-    q.set("a", 99); // update, not new
-
-    expect(q.size).toBe(2);
-    const drained = q.drain();
-    expect(drained.get("a")).toBe(99);
-    expect(drained.get("b")).toBe(2);
-  });
-
-  it("clear removes all", () => {
-    const q = new OfflineQueue();
-    q.set("a", 1);
-    q.set("b", 2);
-    q.clear();
-    expect(q.size).toBe(0);
-  });
-
-  it("drain empties the queue", () => {
-    const q = new OfflineQueue();
-    q.set("x", 42);
-    const first = q.drain();
-    expect(first.size).toBe(1);
-
-    const second = q.drain();
-    expect(second.size).toBe(0);
-  });
-});

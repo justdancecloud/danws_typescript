@@ -214,6 +214,9 @@ export class DanWebSocketClient {
     this._reconnectEngine.onReconnect((attempt, delay) => {
       this._emit(this._onReconnecting, attempt, delay);
     });
+    this._reconnectEngine.onAttempt(() => {
+      this.connect();
+    });
     this._reconnectEngine.onExhausted(() => {
       this._state = "disconnected";
       this._emitError(new DanWSError("RECONNECT_EXHAUSTED", "All reconnection attempts exhausted"));
@@ -229,6 +232,11 @@ export class DanWebSocketClient {
     this._sendFrame(identifyFrame);
 
     this._emit(this._onConnect);
+
+    // Flush any pending topic subscriptions that were queued while disconnected
+    if (this._topicDirty && this._subscriptions.size > 0) {
+      this._sendTopicSync();
+    }
   }
 
   private _handleClose(): void {
@@ -246,9 +254,17 @@ export class DanWebSocketClient {
 
     if (this._intentionalDisconnect) return;
 
-    this._state = "reconnecting";
     this._emit(this._onDisconnect);
-    this._reconnectEngine.start();
+
+    if (this._reconnectEngine.isActive) {
+      // Already reconnecting — schedule next attempt
+      this._state = "reconnecting";
+      this._reconnectEngine.retry();
+    } else {
+      // First disconnect — start reconnection cycle
+      this._state = "reconnecting";
+      this._reconnectEngine.start();
+    }
   }
 
   private _handleMessage(data: ArrayBuffer | ArrayBufferView | string): void {
