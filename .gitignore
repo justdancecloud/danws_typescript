@@ -4,4 +4,8 @@ dist/
 !README.md
 !dan-protocol.md
 !CHANGELOG.md
+!CONTRIBUTING.md
+!SECURITY.md
+!docs/*.md
+!docs/**/*.md
 .env
