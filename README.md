@@ -16,19 +16,45 @@ Also available in **Java**: [dan-websocket for Java](https://github.com/justdanc
 ### Quick Start
 
 ```typescript
-// Server
+// Server — just set objects. That's it.
 import { DanWebSocketServer } from "dan-websocket/server";
 const server = new DanWebSocketServer({ port: 8080, mode: "broadcast" });
-server.set("price", { btc: 67000, eth: 3200 });
 
-// Client
+server.set("price", { btc: 67000, eth: 3200 });
+// Internally: "price" is split into price.btc (Float64, 8 bytes) and price.eth (Float64, 8 bytes).
+// Each client receives only these two binary frames — not a JSON blob.
+```
+
+```typescript
+// Client — just read objects. No parsing, no schema, no boilerplate.
 import { DanWebSocketClient } from "dan-websocket";
 const client = new DanWebSocketClient("ws://localhost:8080");
-client.onUpdate((data) => console.log(data.price.btc)); // 67000
+
+client.onUpdate((data) => {
+  console.log(data.price.btc);  // 67000
+  console.log(data.price.eth);  // 3200
+  // This callback fires once per server flush (~100ms batch),
+  // not once per field. Safe for rendering — no render storms.
+});
+
 client.connect();
 ```
 
-Only changed fields are binary-encoded and sent — up to **99% less traffic** than re-sending full JSON. Drop in the library, cut your network costs.
+Now update just one field:
+
+```typescript
+server.set("price", { btc: 67100, eth: 3200 });
+// Only price.btc changed → only 1 frame (8 bytes) goes over the wire.
+// price.eth is identical → not sent. Zero waste.
+```
+
+**What just happened?**
+- Server: you wrote a plain JavaScript object.
+- Wire: only the changed leaf field (`btc`) traveled as a binary-encoded 8-byte Float64.
+- Client: you read it back as a plain JavaScript object via `data.price.btc`.
+- No JSON serialization. No manual diffing. No field-by-field subscriptions.
+
+This is the core idea: **objects in, objects out, binary in between**. Only changed fields are sent — up to **99% less traffic** than re-sending full JSON. Drop in the library, cut your network costs.
 
 ---
 
