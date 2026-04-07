@@ -1,10 +1,5 @@
-import { DataType, FrameType } from "../protocol/types.js";
 import type { Frame } from "../protocol/types.js";
-import { serialize } from "../protocol/serializer.js";
-import { detectDataType } from "../protocol/auto-type.js";
-import { validateKeyPath } from "../state/key-registry.js";
-import { flattenValue, shouldFlatten } from "./flatten.js";
-import { detectArrayShiftBoth, isArrayIndexKey, applyArrayShiftLeft, applyArrayShiftRight, type ArrayShiftContext } from "./array-diff.js";
+import { FlatStateManager } from "./flat-state-manager.js";
 import type { DanWebSocketSession } from "./session.js";
 
 export enum EventType {
@@ -15,243 +10,50 @@ export enum EventType {
 
 export type TopicCallback = (event: EventType, topic: TopicHandle, session: DanWebSocketSession) => void | Promise<void>;
 
-interface PayloadEntry {
-  keyId: number;
-  type: DataType;
-  value: unknown;
-}
-
 export class TopicPayload {
-  private _entries = new Map<string, PayloadEntry>();
   private _index: number;
   private _allocateKeyId: () => number;
-  private _enqueue: ((frame: Frame) => void) | null = null;
-  private _onResync: (() => void) | null = null;
-  private _flattenedKeys = new Map<string, Set<string>>();
-  private _wirePathCache = new Map<string, string>();
-  private _previousArrays = new Map<string, unknown[]>();
+  private _flatState: FlatStateManager;
 
   constructor(index: number, allocateKeyId: () => number) {
     this._index = index;
     this._allocateKeyId = allocateKeyId;
+    this._flatState = new FlatStateManager({
+      allocateKeyId,
+      enqueue: () => {},
+      onResync: () => {},
+      wirePrefix: `t.${index}.`,
+    });
   }
 
   /** @internal */
   _bind(enqueue: (frame: Frame) => void, onResync: () => void): void {
-    this._enqueue = enqueue;
-    this._onResync = onResync;
+    this._flatState = new FlatStateManager({
+      allocateKeyId: this._allocateKeyId,
+      enqueue,
+      onResync,
+      wirePrefix: `t.${this._index}.`,
+    });
   }
 
-  set(key: string, value: unknown): void {
-    if (shouldFlatten(value)) {
-      // Array shift detection for array values
-      if (Array.isArray(value)) {
-        const oldArr = this._previousArrays.get(key);
-        // Only use shift optimization for arrays of primitives
-        const hasPrimitiveElements = value.length === 0 || !shouldFlatten(value[0]);
-        if (hasPrimitiveElements && oldArr && oldArr.length > 0 && value.length > 0) {
-          const shift = detectArrayShiftBoth(oldArr, value);
-          const ctx = this._buildShiftContext();
-          if (shift.direction === "left") {
-            applyArrayShiftLeft(ctx, key, oldArr, value, shift.count);
-            return;
-          }
-          if (shift.direction === "right") {
-            applyArrayShiftRight(ctx, key, oldArr, value, shift.count);
-            return;
-          }
-        }
-        this._previousArrays.set(key, [...value]);
-      }
-
-      const flattened = flattenValue(key, value);
-      const newKeys = new Set(flattened.keys());
-      const oldKeys = this._flattenedKeys.get(key);
-      let needsResync = false;
-      if (oldKeys) {
-        for (const oldPath of oldKeys) {
-          if (!newKeys.has(oldPath)) {
-            if (isArrayIndexKey(key, oldPath)) continue; // stale array index — client uses .length
-            this._entries.delete(oldPath);
-            this._wirePathCache.delete(oldPath);
-            needsResync = true;
-          }
-        }
-      }
-      this._flattenedKeys.set(key, newKeys);
-      for (const [path, leaf] of flattened) {
-        if (this._setLeafInternal(path, leaf)) needsResync = true;
-      }
-      if (needsResync && this._onResync) this._onResync();
-      return;
-    }
-    this._setLeafDirect(key, value);
-  }
-
-  private _buildShiftContext(): ArrayShiftContext {
-    return {
-      getEntry: (key) => this._entries.get(key),
-      setEntryValue: (key, value) => { const e = this._entries.get(key); if (e) e.value = value; },
-      setLeaf: (key, value) => this._setLeafDirect(key, value),
-      enqueue: (frame) => { if (this._enqueue) this._enqueue(frame); },
-      setFlattenedKeys: (key, keys) => this._flattenedKeys.set(key, keys),
-      setPreviousArray: (key, arr) => this._previousArrays.set(key, arr),
-    };
-  }
-
-  /** Set leaf, return true if a resync is needed (new key or type change). */
-  private _setLeafInternal(key: string, value: unknown): boolean {
-    validateKeyPath(key);
-    const newType = detectDataType(value);
-    serialize(newType, value);
-
-    const existing = this._entries.get(key);
-
-    if (!existing) {
-      const entry: PayloadEntry = { keyId: this._allocateKeyId(), type: newType, value };
-      this._entries.set(key, entry);
-      if (this._enqueue) {
-        const wirePath = this._wirePathCache.get(key) ?? (() => { const p = `t.${this._index}.${key}`; this._wirePathCache.set(key, p); return p; })();
-        this._enqueue({ frameType: FrameType.ServerKeyRegistration, keyId: entry.keyId, dataType: entry.type, payload: wirePath });
-        this._enqueue({ frameType: FrameType.ServerSync, keyId: 0, dataType: DataType.Null, payload: null });
-        this._enqueue({ frameType: FrameType.ServerValue, keyId: entry.keyId, dataType: entry.type, payload: entry.value });
-      }
-      return false;  // sent incrementally, no resync needed
-    }
-
-    if (existing.type !== newType) {
-      existing.type = newType;
-      existing.value = value;
-      return true;
-    }
-
-    if (existing.value === value) return false;
-
-    existing.value = value;
-    if (this._enqueue) {
-      this._enqueue({
-        frameType: FrameType.ServerValue,
-        keyId: existing.keyId,
-        dataType: existing.type,
-        payload: value,
-      });
-    }
-    return false;
-  }
-
-  private _setLeafDirect(key: string, value: unknown): void {
-    validateKeyPath(key);
-    const newType = detectDataType(value);
-    serialize(newType, value);
-
-    const existing = this._entries.get(key);
-
-    if (!existing) {
-      const entry: PayloadEntry = { keyId: this._allocateKeyId(), type: newType, value };
-      this._entries.set(key, entry);
-      if (this._enqueue) {
-        const wirePath = this._wirePathCache.get(key) ?? (() => { const p = `t.${this._index}.${key}`; this._wirePathCache.set(key, p); return p; })();
-        this._enqueue({ frameType: FrameType.ServerKeyRegistration, keyId: entry.keyId, dataType: entry.type, payload: wirePath });
-        this._enqueue({ frameType: FrameType.ServerSync, keyId: 0, dataType: DataType.Null, payload: null });
-        this._enqueue({ frameType: FrameType.ServerValue, keyId: entry.keyId, dataType: entry.type, payload: entry.value });
-      }
-      return;
-    }
-
-    if (existing.type !== newType) {
-      existing.type = newType;
-      existing.value = value;
-      if (this._onResync) this._onResync();
-      return;
-    }
-
-    // Same value — skip push
-    if (existing.value === value) return;
-
-    existing.value = value;
-    if (this._enqueue) {
-      this._enqueue({
-        frameType: FrameType.ServerValue,
-        keyId: existing.keyId,
-        dataType: existing.type,
-        payload: value,
-      });
-    }
-  }
-
-  get(key: string): unknown {
-    const entry = this._entries.get(key);
-    return entry ? entry.value : undefined;
-  }
-
-  get keys(): string[] {
-    return Array.from(this._entries.keys());
-  }
+  set(key: string, value: unknown): void { this._flatState.set(key, value); }
+  get(key: string): unknown { return this._flatState.get(key); }
+  get keys(): string[] { return this._flatState.keys; }
 
   clear(key?: string): void {
     if (key !== undefined) {
-      const flatKeys = this._flattenedKeys.get(key);
-      if (flatKeys) {
-        for (const path of flatKeys) {
-          this._entries.delete(path);
-          this._wirePathCache.delete(path);
-        }
-        this._flattenedKeys.delete(key);
-        this._wirePathCache.delete(key);
-        this._previousArrays.delete(key);
-        if (this._onResync) this._onResync();
-      } else if (this._entries.delete(key)) {
-        this._wirePathCache.delete(key);
-        this._previousArrays.delete(key);
-        if (this._onResync) this._onResync();
-      }
+      this._flatState.clear(key);
     } else {
-      if (this._entries.size > 0) {
-        this._entries.clear();
-        this._flattenedKeys.clear();
-        this._wirePathCache.clear();
-        this._previousArrays.clear();
-        if (this._onResync) this._onResync();
-      }
+      this._flatState.clear();
     }
-  }
-
-  /** @internal — build key registration frames with wire prefix t.<index>.<key> */
-  _buildKeyFrames(): Frame[] {
-    const frames: Frame[] = [];
-    for (const [key, entry] of this._entries) {
-      let wirePath = this._wirePathCache.get(key);
-      if (!wirePath) {
-        wirePath = `t.${this._index}.${key}`;
-        this._wirePathCache.set(key, wirePath);
-      }
-      frames.push({
-        frameType: FrameType.ServerKeyRegistration,
-        keyId: entry.keyId,
-        dataType: entry.type,
-        payload: wirePath,
-      });
-    }
-    return frames;
   }
 
   /** @internal */
-  _buildValueFrames(): Frame[] {
-    const frames: Frame[] = [];
-    for (const entry of this._entries.values()) {
-      if (entry.value !== undefined) {
-        frames.push({
-          frameType: FrameType.ServerValue,
-          keyId: entry.keyId,
-          dataType: entry.type,
-          payload: entry.value,
-        });
-      }
-    }
-    return frames;
-  }
+  _buildKeyFrames(): Frame[] { return this._flatState.buildKeyFrames(); }
+  /** @internal */
+  _buildValueFrames(): Frame[] { return this._flatState.buildValueFrames(); }
 
-  get _size(): number { return this._entries.size; }
+  get _size(): number { return this._flatState.size; }
   get _idx(): number { return this._index; }
 }
 
@@ -276,8 +78,12 @@ export class TopicHandle {
 
   setCallback(fn: TopicCallback): void {
     this._callback = fn;
-    // Run immediately with SubscribeEvent
-    try { const r = fn(EventType.SubscribeEvent, this, this._session); if (r instanceof Promise) r.catch(() => {}); } catch {}
+    try {
+      const r = fn(EventType.SubscribeEvent, this, this._session);
+      if (r instanceof Promise) r.catch((e) => console.warn("[dan-ws] topic callback error", e));
+    } catch (e) {
+      console.warn("[dan-ws] topic setCallback error", e);
+    }
   }
 
   setDelayedTask(ms: number): void {
@@ -285,7 +91,12 @@ export class TopicHandle {
     this._delayMs = ms;
     this._timer = setInterval(() => {
       if (this._callback) {
-        try { const r = this._callback(EventType.DelayedTaskEvent, this, this._session); if (r instanceof Promise) r.catch(() => {}); } catch {}
+        try {
+          const r = this._callback(EventType.DelayedTaskEvent, this, this._session);
+          if (r instanceof Promise) r.catch((e) => console.warn("[dan-ws] delayed task error", e));
+        } catch (e) {
+          console.warn("[dan-ws] delayed task error", e);
+        }
       }
     }, ms);
   }
@@ -306,7 +117,12 @@ export class TopicHandle {
     this.clearDelayedTask();
 
     if (this._callback) {
-      try { const r = this._callback(EventType.ChangedParamsEvent, this, this._session); if (r instanceof Promise) r.catch(() => {}); } catch {}
+      try {
+        const r = this._callback(EventType.ChangedParamsEvent, this, this._session);
+        if (r instanceof Promise) r.catch((e) => console.warn("[dan-ws] params change callback error", e));
+      } catch (e) {
+        console.warn("[dan-ws] params change callback error", e);
+      }
     }
 
     if (hadTask && savedMs !== null) {
@@ -321,4 +137,3 @@ export class TopicHandle {
     this._delayMs = null;
   }
 }
-

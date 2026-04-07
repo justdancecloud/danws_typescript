@@ -18,6 +18,10 @@ export interface FlatStateCallbacks {
   onResync(): void;
   /** Wire path prefix for key registration (e.g. "t.0." for topics, "" for flat). */
   wirePrefix: string;
+  /** If provided, new keys send 3 incremental frames instead of triggering resync. */
+  onIncrementalKey?: (keyFrame: Frame, syncFrame: Frame, valueFrame: Frame) => void;
+  /** Called when cachedKeyFrames should be invalidated. */
+  onKeyStructureChange?: () => void;
 }
 
 /**
@@ -76,7 +80,7 @@ export class FlatStateManager {
       if (needsResync) this._cb.onResync();
       return;
     }
-    this._setLeaf(key, value);
+    if (this._setLeaf(key, value)) this._cb.onResync();
   }
 
   get(key: string): unknown {
@@ -99,9 +103,11 @@ export class FlatStateManager {
         for (const path of flatKeys) this._entries.delete(path);
         this._flattenedKeys.delete(key);
         this._previousArrays.delete(key);
+        this._cb.onKeyStructureChange?.();
         this._cb.onResync();
       } else if (this._entries.delete(key)) {
         this._previousArrays.delete(key);
+        this._cb.onKeyStructureChange?.();
         this._cb.onResync();
       }
     } else {
@@ -109,6 +115,7 @@ export class FlatStateManager {
         this._entries.clear();
         this._flattenedKeys.clear();
         this._previousArrays.clear();
+        this._cb.onKeyStructureChange?.();
         this._cb.onResync();
       }
     }
@@ -154,17 +161,25 @@ export class FlatStateManager {
     if (!existing) {
       const keyId = this._cb.allocateKeyId();
       this._entries.set(key, { keyId, type: newType, value });
-      // Incremental: send 3 frames (KeyReg + Sync + Value)
+      this._cb.onKeyStructureChange?.();
       const wirePath = this._cb.wirePrefix ? `${this._cb.wirePrefix}${key}` : key;
-      this._cb.enqueue({ frameType: FrameType.ServerKeyRegistration, keyId, dataType: newType, payload: wirePath });
-      this._cb.enqueue({ frameType: FrameType.ServerSync, keyId: 0, dataType: DataType.Null, payload: null });
-      this._cb.enqueue({ frameType: FrameType.ServerValue, keyId, dataType: newType, payload: value });
+      const keyFrame: Frame = { frameType: FrameType.ServerKeyRegistration, keyId, dataType: newType, payload: wirePath };
+      const syncFrame: Frame = { frameType: FrameType.ServerSync, keyId: 0, dataType: DataType.Null, payload: null };
+      const valueFrame: Frame = { frameType: FrameType.ServerValue, keyId, dataType: newType, payload: value };
+      if (this._cb.onIncrementalKey) {
+        this._cb.onIncrementalKey(keyFrame, syncFrame, valueFrame);
+      } else {
+        this._cb.enqueue(keyFrame);
+        this._cb.enqueue(syncFrame);
+        this._cb.enqueue(valueFrame);
+      }
       return false;
     }
 
     if (existing.type !== newType) {
       existing.type = newType;
       existing.value = value;
+      this._cb.onKeyStructureChange?.();
       return true; // needs resync
     }
 

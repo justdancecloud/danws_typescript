@@ -180,7 +180,7 @@ export class AuthController {
 
 // ──── UUID helpers ────
 
-function bytesToUuid(bytes: Uint8Array): string {
+export function bytesToUuid(bytes: Uint8Array): string {
   const hex = Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
   return [
     hex.slice(0, 8),
@@ -191,7 +191,7 @@ function bytesToUuid(bytes: Uint8Array): string {
   ].join("-");
 }
 
-function uuidToBytes(uuid: string): Uint8Array {
+export function uuidToBytes(uuid: string): Uint8Array {
   const hex = uuid.replace(/-/g, "");
   if (hex.length !== 32) {
     throw new DanWSError("IDENTIFY_INVALID", "UUID must be 16 bytes");

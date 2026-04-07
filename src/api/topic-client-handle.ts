@@ -63,7 +63,7 @@ export class TopicClientHandle {
   /** @internal — fire onReceive per-frame, mark dirty for batch onUpdate */
   _notify(userKey: string, value: unknown): void {
     for (const cb of this._onReceive) {
-      try { cb(userKey, value); } catch {}
+      try { cb(userKey, value); } catch (e) { console.warn("[dan-ws] topic onReceive error", e); }
     }
     this._dirty = true;
   }
@@ -74,7 +74,7 @@ export class TopicClientHandle {
     this._dirty = false;
     const view = this._createPayloadView();
     for (const cb of this._onUpdate) {
-      try { cb(view); } catch {}
+      try { cb(view); } catch (e) { console.warn("[dan-ws] topic onUpdate error", e); }
     }
   }
 

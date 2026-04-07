@@ -4,7 +4,7 @@ import { DataType, FrameType, DanWSError } from "../protocol/types.js";
 import type { Frame } from "../protocol/types.js";
 import { encode, encodeHeartbeat } from "../protocol/codec.js";
 import { createStreamParser } from "../protocol/stream-parser.js";
-import { AuthController } from "../state/auth-controller.js";
+import { AuthController, bytesToUuid, uuidToBytes } from "../state/auth-controller.js";
 import { BulkQueue } from "../connection/bulk-queue.js";
 import { HeartbeatManager } from "../connection/heartbeat-manager.js";
 import { DanWebSocketSession } from "./session.js";
@@ -500,31 +500,28 @@ export class DanWebSocketServer {
     if (internal.clientRegistry && internal.clientValues) {
       const indexToName = new Map<string, string>();
 
+      // Single pass: classify name vs param keys
       for (const path of internal.clientRegistry.paths) {
-        const match = path.match(/^topic\.(\d+)\.name$/);
-        if (match) {
-          const entry = internal.clientRegistry.getByPath(path);
-          if (entry) {
-            const topicName = internal.clientValues.get(entry.keyId) as string;
-            if (topicName) {
-              const idx = parseInt(match[1]);
-              indexToName.set(match[1], topicName);
-              nameToIndex.set(topicName, idx);
-              if (!newTopics.has(topicName)) newTopics.set(topicName, {});
-            }
-          }
-        }
-      }
+        const entry = internal.clientRegistry.getByPath(path);
+        if (!entry) continue;
 
-      for (const path of internal.clientRegistry.paths) {
-        const match = path.match(/^topic\.(\d+)\.param\.(.+)$/);
-        if (match) {
-          const topicName = indexToName.get(match[1]);
+        if (path.endsWith(".name") && path.startsWith("topic.")) {
+          const idxStr = path.slice(6, path.length - 5); // "topic.<idx>.name" → idx
+          const topicName = internal.clientValues.get(entry.keyId) as string;
           if (topicName) {
-            const entry = internal.clientRegistry.getByPath(path);
-            if (entry) {
+            indexToName.set(idxStr, topicName);
+            nameToIndex.set(topicName, parseInt(idxStr));
+            if (!newTopics.has(topicName)) newTopics.set(topicName, {});
+          }
+        } else {
+          const paramIdx = path.indexOf(".param.");
+          if (paramIdx !== -1 && path.startsWith("topic.")) {
+            const idxStr = path.slice(6, paramIdx); // "topic.<idx>.param.<key>" → idx
+            const paramKey = path.slice(paramIdx + 7);
+            const topicName = indexToName.get(idxStr);
+            if (topicName) {
               const value = internal.clientValues.get(entry.keyId);
-              if (value !== undefined) newTopics.get(topicName)![match[2]] = value;
+              if (value !== undefined) newTopics.get(topicName)![paramKey] = value;
             }
           }
         }
@@ -565,7 +562,7 @@ export class DanWebSocketServer {
       } else {
         // Check params changed
         const oldParams = existingHandle ? existingHandle.params : existingInfo?.params;
-        const changed = JSON.stringify(oldParams) !== JSON.stringify(params);
+        const changed = !shallowEqual(oldParams ?? {}, params);
         if (changed) {
           // Update TopicHandle (auto fires callback with ChangedParamsEvent)
           if (existingHandle) {
@@ -614,14 +611,13 @@ export class DanWebSocketServer {
   }
 }
 
-function bytesToUuid(bytes: Uint8Array): string {
-  const hex = Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
-  return [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20, 32)].join("-");
+function shallowEqual(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  const keysA = Object.keys(a);
+  const keysB = Object.keys(b);
+  if (keysA.length !== keysB.length) return false;
+  for (const key of keysA) {
+    if (a[key] !== b[key]) return false;
+  }
+  return true;
 }
 
-function uuidToBytes(uuid: string): Uint8Array {
-  const hex = uuid.replace(/-/g, "");
-  const bytes = new Uint8Array(16);
-  for (let i = 0; i < 16; i++) bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-  return bytes;
-}
