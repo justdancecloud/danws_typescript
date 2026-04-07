@@ -202,14 +202,17 @@ export class DanWebSocketSession {
       if (flatKeys) {
         for (const path of flatKeys) this._sessionEntries.delete(path);
         this._flattenedKeys.delete(key);
+        this._previousArrays.delete(key);
         this._triggerSessionResync();
       } else if (this._sessionEntries.delete(key)) {
+        this._previousArrays.delete(key);
         this._triggerSessionResync();
       }
     } else {
       if (this._sessionEntries.size > 0) {
         this._sessionEntries.clear();
         this._flattenedKeys.clear();
+        this._previousArrays.clear();
         this._triggerSessionResync();
       }
     }

@@ -198,9 +198,11 @@ export class TopicPayload {
         }
         this._flattenedKeys.delete(key);
         this._wirePathCache.delete(key);
+        this._previousArrays.delete(key);
         if (this._onResync) this._onResync();
       } else if (this._entries.delete(key)) {
         this._wirePathCache.delete(key);
+        this._previousArrays.delete(key);
         if (this._onResync) this._onResync();
       }
     } else {
@@ -208,6 +210,7 @@ export class TopicPayload {
         this._entries.clear();
         this._flattenedKeys.clear();
         this._wirePathCache.clear();
+        this._previousArrays.clear();
         if (this._onResync) this._onResync();
       }
     }

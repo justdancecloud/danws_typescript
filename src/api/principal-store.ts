@@ -192,9 +192,11 @@ export class PrincipalTX {
       if (flatKeys) {
         for (const path of flatKeys) this._entries.delete(path);
         this._flattenedKeys.delete(key);
+        this._previousArrays.delete(key);
         this._cachedKeyFrames = null;
         this._triggerResync();
       } else if (this._entries.delete(key)) {
+        this._previousArrays.delete(key);
         this._cachedKeyFrames = null;
         this._triggerResync();
       }
@@ -202,6 +204,7 @@ export class PrincipalTX {
       if (this._entries.size > 0) {
         this._entries.clear();
         this._flattenedKeys.clear();
+        this._previousArrays.clear();
         this._nextKeyId = 1;
         this._cachedKeyFrames = null;
         this._triggerResync();
