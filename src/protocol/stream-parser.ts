@@ -17,7 +17,7 @@ export interface StreamParser {
   reset(): void;
 }
 
-export function createStreamParser(): StreamParser {
+export function createStreamParser(maxBufferSize = 1_048_576): StreamParser {
   let state: ParserState = ParserState.Idle;
   let buffer: number[] = [];
 
@@ -91,7 +91,13 @@ export function createStreamParser(): StreamParser {
           if (byte === DLE) {
             state = ParserState.InFrameAfterDLE;
           } else {
-            buffer.push(byte);
+            if (buffer.length >= maxBufferSize) {
+              emitError(new DanWSError("FRAME_TOO_LARGE", `Frame exceeds ${maxBufferSize} bytes`));
+              buffer = [];
+              state = ParserState.Idle;
+            } else {
+              buffer.push(byte);
+            }
           }
           break;
 

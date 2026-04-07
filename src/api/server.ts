@@ -67,6 +67,7 @@ export class DanWebSocketServer {
   private _debug: boolean | ((msg: string, err?: Error) => void) = false;
   private _flushIntervalMs: number | undefined;
   private _maxValueSize: number;
+  private _maxMessageSize: number;
 
   private _sessions = new Map<string, InternalSession>();
   private _tmpSessions = new Map<string, InternalSession>();
@@ -113,7 +114,8 @@ export class DanWebSocketServer {
       this._principals._setOnNewPrincipal((ptx) => this._bindPrincipalTX(ptx));
     }
 
-    const maxPayload = options.maxMessageSize ?? 1_048_576; // 1MB default
+    this._maxMessageSize = options.maxMessageSize ?? 1_048_576;
+    const maxPayload = this._maxMessageSize;
     if (options.port != null) {
       this._wss = new WSServer({ port: options.port, path: this._path, maxPayload });
     } else {
@@ -328,7 +330,7 @@ export class DanWebSocketServer {
   // ──── Internal: Connection handling ────
 
   private _handleConnection(ws: WS): void {
-    const parser = createStreamParser();
+    const parser = createStreamParser(this._maxMessageSize);
     let identified = false;
     let clientUuid = "";
 
