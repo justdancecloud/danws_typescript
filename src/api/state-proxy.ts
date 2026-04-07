@@ -9,19 +9,17 @@ export function createStateProxy(
   prefix = "",
 ): Record<string, any> {
   // Build prefix index for O(1) "has children" checks
-  let _prefixSet: Set<string> | null = null;
+  // Rebuilt on every access to avoid stale cache when keys change between accesses
   function prefixSet(): Set<string> {
-    if (!_prefixSet) {
-      _prefixSet = new Set<string>();
-      for (const k of keysFn()) {
-        let dot = k.indexOf(".");
-        while (dot !== -1) {
-          _prefixSet.add(k.slice(0, dot + 1)); // "user." , "user.scores." etc
-          dot = k.indexOf(".", dot + 1);
-        }
+    const set = new Set<string>();
+    for (const k of keysFn()) {
+      let dot = k.indexOf(".");
+      while (dot !== -1) {
+        set.add(k.slice(0, dot + 1)); // "user." , "user.scores." etc
+        dot = k.indexOf(".", dot + 1);
       }
     }
-    return _prefixSet;
+    return set;
   }
 
   function hasChildren(path: string): boolean {

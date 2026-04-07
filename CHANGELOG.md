@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.1.8 (2026-04-07)
+- Fix: state-proxy prefix cache now rebuilt on every access (prevents stale hasChildren)
+- Add: reconnection E2E tests (4 tests) and browser compatibility tests (8 tests)
+
 ## 2.1.7 (2026-04-07)
 - Add: comprehensive mode tests (36 tests) — all 4 modes, mode guards, maxValueSize
 - Version sync: TypeScript and Java now share the same version number
