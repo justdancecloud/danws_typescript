@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.1.7 (2026-04-07)
+- Add: comprehensive mode tests (36 tests) — all 4 modes, mode guards, maxValueSize
+- Version sync: TypeScript and Java now share the same version number
+
 ## 2.1.6 (2026-04-07)
 - README: detailed mode documentation with complete server + client examples for all 4 modes
 - README: auth flow, topic lifecycle, multi-device sync, params change explained
