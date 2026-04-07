@@ -310,15 +310,19 @@ Instead of re-sending every shifted element, the server sends:
 
 The client performs the shift locally in O(n) memory copy, then applies only the new values.
 
-### Frame Count Comparison
+### Frame Count Comparison (Verified by automated tests)
 
-| Scenario | Without ARRAY_SHIFT | With ARRAY_SHIFT (v2.0) |
-|----------|-------------------|------------------------|
-| 100-point chart, shift by 1 | 101 frames (100 values + length) | 3 frames (1 shift + 1 new value + length) |
-| 1000-point chart, shift by 1 | 1001 frames | 3 frames |
-| 50-item order book, shift by 5 | 51 frames | 7 frames (1 shift + 5 new values + length) |
-| Append only (no shift) | 2 frames | 2 frames (no overhead) |
-| Pop from front | 101 frames | 2 frames (1 shift + length) |
+| Scenario | Array Size | Before v2.0 | After v2.0 | Reduction |
+|----------|-----------|-------------|------------|-----------|
+| Shift+push (sliding window) | 100 | ~100 frames | **2 frames** | **98%** |
+| Shift by 10 + push 10 | 100 | ~100 frames | **10 frames** | **90%** |
+| Prepend (right shift) | 50 | ~50 frames | **3 frames** | **94%** |
+| Append 1 element | 10 | 2 frames | **2 frames** | Same (already optimal) |
+| Pop (shrink from end) | 10→7 | full resync | **1 frame** | **99%+** |
+| Unchanged (same data) | 100 | ~100 frames | **0 frames** | **100%** |
+| 10× repeated shift+push | 50 | ~500 total | **20 total** (2 each) | **96%** |
+
+> These numbers are from actual E2E tests: server sets the array, client counts `onReceive` callbacks. See `FrameCountTest.java` (Java) and `array-sync.test.ts` (TypeScript) for full benchmarks.
 
 ### Practical Examples
 
