@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.1.6 (2026-04-07)
+- README: detailed mode documentation with complete server + client examples for all 4 modes
+- README: auth flow, topic lifecycle, multi-device sync, params change explained
+
 ## 2.1.5 (2026-04-07)
 - Add: `maxMessageSize` option (default 1MB) — limits incoming WebSocket message size via ws maxPayload
 - Add: `maxValueSize` option (default 64KB) — throws VALUE_TOO_LARGE if serialized value exceeds limit
