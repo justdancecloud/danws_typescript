@@ -14,15 +14,18 @@ export class TopicPayload {
   private _index: number;
   private _allocateKeyId: () => number;
   private _flatState: FlatStateManager;
+  private _maxValueSize: number | undefined;
 
-  constructor(index: number, allocateKeyId: () => number) {
+  constructor(index: number, allocateKeyId: () => number, maxValueSize?: number) {
     this._index = index;
     this._allocateKeyId = allocateKeyId;
+    this._maxValueSize = maxValueSize;
     this._flatState = new FlatStateManager({
       allocateKeyId,
       enqueue: () => {},
       onResync: () => {},
       wirePrefix: `t.${index}.`,
+      maxValueSize,
     });
   }
 
@@ -33,6 +36,7 @@ export class TopicPayload {
       enqueue,
       onResync,
       wirePrefix: `t.${this._index}.`,
+      maxValueSize: this._maxValueSize,
     });
   }
 

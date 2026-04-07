@@ -23,6 +23,10 @@ export interface ServerOptions {
   session?: { ttl?: number };
   debug?: boolean | ((msg: string, err?: Error) => void);
   flushIntervalMs?: number;
+  /** Max WebSocket message size in bytes (default: 1MB). Rejects oversized incoming messages. */
+  maxMessageSize?: number;
+  /** Max single serialized value size in bytes (default: 64KB). Throws on set() if exceeded. */
+  maxValueSize?: number;
 }
 
 interface InternalSession {
@@ -62,6 +66,7 @@ export class DanWebSocketServer {
   private _authTimeout = 5000;
   private _debug: boolean | ((msg: string, err?: Error) => void) = false;
   private _flushIntervalMs: number | undefined;
+  private _maxValueSize: number;
 
   private _sessions = new Map<string, InternalSession>();
   private _tmpSessions = new Map<string, InternalSession>();
@@ -91,6 +96,7 @@ export class DanWebSocketServer {
     this._ttl = options.session?.ttl ?? 600_000;
     this._debug = options.debug ?? false;
     this._flushIntervalMs = options.flushIntervalMs;
+    this._maxValueSize = options.maxValueSize ?? 65_536;
 
     // Topic namespace
     const ns: TopicNamespaceInternal = {
@@ -102,14 +108,16 @@ export class DanWebSocketServer {
     this.topic = ns;
 
     this._principals = new PrincipalManager();
+    this._principals._setMaxValueSize(this._maxValueSize);
     if (!this._isTopicMode) {
       this._principals._setOnNewPrincipal((ptx) => this._bindPrincipalTX(ptx));
     }
 
+    const maxPayload = options.maxMessageSize ?? 1_048_576; // 1MB default
     if (options.port != null) {
-      this._wss = new WSServer({ port: options.port, path: this._path });
+      this._wss = new WSServer({ port: options.port, path: this._path, maxPayload });
     } else {
-      this._wss = new WSServer({ server: options.server!, path: this._path });
+      this._wss = new WSServer({ server: options.server!, path: this._path, maxPayload });
     }
 
     this._wss.on("connection", (ws) => this._handleConnection(ws));
@@ -414,6 +422,7 @@ export class DanWebSocketServer {
 
     const session = new DanWebSocketSession(clientUuid);
     session._setDebug(this._debug);
+    session._setMaxValueSize(this._maxValueSize);
     const bulkQueue = new BulkQueue(this._flushIntervalMs);
     const heartbeat = new HeartbeatManager();
     const authController = new AuthController({ required: this._authEnabled, timeout: this._authTimeout });

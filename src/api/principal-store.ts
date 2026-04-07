@@ -15,7 +15,7 @@ export class PrincipalTX {
   private _cachedKeyFrames: Frame[] | null = null;
   private _flatState: FlatStateManager;
 
-  constructor(name: string) {
+  constructor(name: string, maxValueSize?: number) {
     this.name = name;
     this._flatState = new FlatStateManager({
       allocateKeyId: () => this._nextKeyId++,
@@ -30,6 +30,7 @@ export class PrincipalTX {
         }
       },
       onKeyStructureChange: () => { this._cachedKeyFrames = null; },
+      maxValueSize,
     });
   }
 
@@ -107,16 +108,22 @@ export class PrincipalManager {
   private _principals = new Map<string, PrincipalTX>();
   private _sessionCounts = new Map<string, number>();
   private _onNewPrincipal: ((ptx: PrincipalTX) => void) | null = null;
+  private _maxValueSize: number | undefined;
 
   /** @internal */
   _setOnNewPrincipal(fn: (ptx: PrincipalTX) => void): void {
     this._onNewPrincipal = fn;
   }
 
+  /** @internal */
+  _setMaxValueSize(size: number): void {
+    this._maxValueSize = size;
+  }
+
   principal(name: string): PrincipalTX {
     let ptx = this._principals.get(name);
     if (!ptx) {
-      ptx = new PrincipalTX(name);
+      ptx = new PrincipalTX(name, this._maxValueSize);
       this._principals.set(name, ptx);
       if (this._onNewPrincipal) {
         this._onNewPrincipal(ptx);

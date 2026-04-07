@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.1.5 (2026-04-07)
+- Add: `maxMessageSize` option (default 1MB) — limits incoming WebSocket message size via ws maxPayload
+- Add: `maxValueSize` option (default 64KB) — throws VALUE_TOO_LARGE if serialized value exceeds limit
+- Size limits propagate to PrincipalTX, Session, TopicPayload via FlatStateCallbacks
+- README rewritten: cleaner structure, comparison table, mode examples
+
 ## 2.1.4 (2026-04-07)
 - Fix: `.d.ts` now hides `@internal` members via `stripInternal` (TopicPayload, TopicHandle, Session internals)
 - Fix: `TopicNamespace` interface no longer exposes `_onSubscribeCbs`/`_onUnsubscribeCbs` in type definitions

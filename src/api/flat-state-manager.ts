@@ -1,4 +1,4 @@
-import { DataType, FrameType } from "../protocol/types.js";
+import { DataType, FrameType, DanWSError } from "../protocol/types.js";
 import type { Frame } from "../protocol/types.js";
 import { serialize } from "../protocol/serializer.js";
 import { detectDataType } from "../protocol/auto-type.js";
@@ -22,6 +22,8 @@ export interface FlatStateCallbacks {
   onIncrementalKey?: (keyFrame: Frame, syncFrame: Frame, valueFrame: Frame) => void;
   /** Called when cachedKeyFrames should be invalidated. */
   onKeyStructureChange?: () => void;
+  /** Max serialized value size in bytes. Throws VALUE_TOO_LARGE if exceeded. */
+  maxValueSize?: number;
 }
 
 /**
@@ -154,7 +156,10 @@ export class FlatStateManager {
   private _setLeaf(key: string, value: unknown): boolean {
     validateKeyPath(key);
     const newType = detectDataType(value);
-    serialize(newType, value);
+    const serialized = serialize(newType, value);
+    if (this._cb.maxValueSize != null && serialized.length > this._cb.maxValueSize) {
+      throw new DanWSError("VALUE_TOO_LARGE", `Serialized value for "${key}" is ${serialized.length} bytes, exceeds maxValueSize (${this._cb.maxValueSize})`);
+    }
 
     const existing = this._entries.get(key);
 

@@ -43,6 +43,9 @@ export class DanWebSocketSession {
   private _topicIndex = 0;
   private _topics = new Map<string, TopicInfo>(); // backward compat
 
+  // ──── Size limits ────
+  private _maxValueSize: number | undefined;
+
   // ──── Debug logging ────
   private _debug: boolean | ((msg: string, err?: Error) => void) = false;
 
@@ -128,6 +131,11 @@ export class DanWebSocketSession {
   }
 
   /** @internal */
+  _setMaxValueSize(size: number): void {
+    this._maxValueSize = size;
+  }
+
+  /** @internal */
   _setEnqueue(fn: (frame: Frame) => void): void {
     this._enqueueFrame = fn;
   }
@@ -147,6 +155,7 @@ export class DanWebSocketSession {
       enqueue,
       onResync: () => this._triggerSessionResync(),
       wirePrefix: "",
+      maxValueSize: this._maxValueSize,
     });
   }
 
@@ -248,7 +257,7 @@ export class DanWebSocketSession {
   _createTopicHandle(name: string, params: Record<string, unknown>, wireIndex?: number): TopicHandle {
     const index = wireIndex ?? this._topicIndex++;
     if (index >= this._topicIndex) this._topicIndex = index + 1;
-    const payload = new TopicPayload(index, () => this._nextKeyId++);
+    const payload = new TopicPayload(index, () => this._nextKeyId++, this._maxValueSize);
     if (this._sessionEnqueue) {
       payload._bind(this._sessionEnqueue, () => this._triggerSessionResync());
     }
