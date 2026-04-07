@@ -60,6 +60,27 @@ export class DanWSError extends globalThis.Error {
   }
 }
 
+/** Check if a frame type is a signal (no payload). */
+export function isSignalFrame(ft: FrameType): boolean {
+  return (
+    ft === FrameType.ServerSync ||
+    ft === FrameType.ClientReady ||
+    ft === FrameType.ClientSync ||
+    ft === FrameType.ServerReady ||
+    ft === FrameType.ServerReset ||
+    ft === FrameType.ClientResyncReq ||
+    ft === FrameType.ClientReset ||
+    ft === FrameType.ServerResyncReq ||
+    ft === FrameType.AuthOk ||
+    ft === FrameType.ServerFlushEnd
+  );
+}
+
+/** Check if a frame type is a key registration. */
+export function isKeyRegistrationFrame(ft: FrameType): boolean {
+  return ft === FrameType.ServerKeyRegistration || ft === FrameType.ClientKeyRegistration;
+}
+
 /** Fixed byte sizes for each data type. -1 means variable length. */
 export const DATA_TYPE_SIZES: Record<DataType, number> = {
   [DataType.Null]: 0,

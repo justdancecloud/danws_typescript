@@ -134,7 +134,8 @@ export class DanWebSocketClient {
       this._ws.onclose = () => this._handleClose();
       this._ws.onerror = () => {};
       this._ws.onmessage = (ev: any) => this._handleMessage(ev.data);
-    } catch {
+    } catch (err) {
+      this._log("connect failed", err instanceof Error ? err : new Error(String(err)));
       this._handleClose();
     }
   }
@@ -163,6 +164,7 @@ export class DanWebSocketClient {
 
   unsubscribe(topicName: string): void {
     if (this._subscriptions.delete(topicName)) {
+      this._topicClientHandles.delete(topicName);
       this._sendTopicSync();
     }
   }

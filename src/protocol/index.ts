@@ -1,4 +1,4 @@
-export { DataType, FrameType, DanWSError, DLE, STX, ETX, ENQ, DATA_TYPE_SIZES } from "./types.js";
+export { DataType, FrameType, DanWSError, DLE, STX, ETX, ENQ, DATA_TYPE_SIZES, isSignalFrame, isKeyRegistrationFrame } from "./types.js";
 export type { Frame } from "./types.js";
 export { serialize, deserialize } from "./serializer.js";
 export { dleEncode, dleDecode } from "./dle.js";

@@ -1,4 +1,4 @@
-import { DLE, STX, ETX, ENQ, DataType, FrameType, DanWSError } from "./types.js";
+import { DLE, STX, ETX, ENQ, DataType, FrameType, DanWSError, isSignalFrame, isKeyRegistrationFrame } from "./types.js";
 import type { Frame } from "./types.js";
 import { serialize, deserialize } from "./serializer.js";
 import { dleEncode, dleDecode } from "./dle.js";
@@ -142,22 +142,3 @@ export function decode(bytes: Uint8Array): Frame[] {
   return frames;
 }
 
-function isKeyRegistrationFrame(ft: FrameType): boolean {
-  return ft === FrameType.ServerKeyRegistration || ft === FrameType.ClientKeyRegistration;
-}
-
-
-function isSignalFrame(ft: FrameType): boolean {
-  return (
-    ft === FrameType.ServerSync ||
-    ft === FrameType.ClientReady ||
-    ft === FrameType.ClientSync ||
-    ft === FrameType.ServerReady ||
-    ft === FrameType.ServerReset ||
-    ft === FrameType.ClientResyncReq ||
-    ft === FrameType.ClientReset ||
-    ft === FrameType.ServerResyncReq ||
-    ft === FrameType.AuthOk ||
-    ft === FrameType.ServerFlushEnd
-  );
-}

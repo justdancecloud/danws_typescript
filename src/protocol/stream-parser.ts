@@ -1,4 +1,4 @@
-import { DLE, STX, ETX, ENQ, DataType, FrameType, DanWSError } from "./types.js";
+import { DLE, STX, ETX, ENQ, DataType, FrameType, DanWSError, isSignalFrame, isKeyRegistrationFrame } from "./types.js";
 import type { Frame } from "./types.js";
 import { deserialize } from "./serializer.js";
 
@@ -50,20 +50,9 @@ export function createStreamParser(): StreamParser {
     const rawPayload = body.subarray(6);
 
     let payload: unknown;
-    if (frameType === FrameType.ServerKeyRegistration || frameType === FrameType.ClientKeyRegistration) {
+    if (isKeyRegistrationFrame(frameType)) {
       payload = new TextDecoder("utf-8", { fatal: true }).decode(rawPayload);
-    } else if (
-      frameType === FrameType.ServerSync ||
-      frameType === FrameType.ClientReady ||
-      frameType === FrameType.ClientSync ||
-      frameType === FrameType.ServerReady ||
-      frameType === FrameType.ServerReset ||
-      frameType === FrameType.ClientResyncReq ||
-      frameType === FrameType.ClientReset ||
-      frameType === FrameType.ServerResyncReq ||
-      frameType === FrameType.AuthOk ||
-      frameType === FrameType.ServerFlushEnd
-    ) {
+    } else if (isSignalFrame(frameType)) {
       payload = null;
     } else {
       payload = deserialize(dataType, rawPayload);

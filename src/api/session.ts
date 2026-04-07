@@ -1,10 +1,6 @@
 import { DataType, FrameType, DanWSError } from "../protocol/types.js";
 import type { Frame } from "../protocol/types.js";
-import { serialize } from "../protocol/serializer.js";
-import { detectDataType } from "../protocol/auto-type.js";
-import { validateKeyPath } from "../state/key-registry.js";
-import { flattenValue, shouldFlatten } from "./flatten.js";
-import { detectArrayShiftBoth, isArrayIndexKey, applyArrayShiftLeft, applyArrayShiftRight, type ArrayShiftContext } from "./array-diff.js";
+import { FlatStateManager } from "./flat-state-manager.js";
 import { TopicHandle, TopicPayload } from "./topic-handle.js";
 
 export type SessionState = "pending" | "authorized" | "synchronizing" | "ready" | "disconnected";
@@ -12,13 +8,6 @@ export type SessionState = "pending" | "authorized" | "synchronizing" | "ready" 
 export interface TopicInfo {
   name: string;
   params: Record<string, unknown>;
-}
-
-interface KeyEntry {
-  keyId: number;
-  path: string;
-  type: DataType;
-  value: unknown;
 }
 
 export class DanWebSocketSession {
@@ -44,12 +33,10 @@ export class DanWebSocketSession {
   private _clientReadyReceived = false;
 
   // ──── Session-level flat TX store (topic modes backward compat) ────
-  private _sessionEntries = new Map<string, KeyEntry>();
-  private _nextKeyId = 1; // global keyId counter — shared by flat session keys and all topic payloads
+  private _nextKeyId = 1;
   private _sessionEnqueue: ((frame: Frame) => void) | null = null;
   private _sessionBound = false;
-  private _flattenedKeys = new Map<string, Set<string>>();
-  private _previousArrays = new Map<string, unknown[]>();
+  private _flatState: FlatStateManager | null = null;
 
   // ──── Topic handles ────
   private _topicHandles = new Map<string, TopicHandle>();
@@ -85,136 +72,28 @@ export class DanWebSocketSession {
   // ──── Session-level flat data API (backward compat) ────
 
   set(key: string, value: unknown): void {
-    if (!this._sessionBound) {
+    if (!this._sessionBound || !this._flatState) {
       throw new DanWSError("INVALID_MODE", "session.set() is only available in topic modes.");
     }
-    if (shouldFlatten(value)) {
-      // Array shift detection for array values
-      if (Array.isArray(value)) {
-        const oldArr = this._previousArrays.get(key);
-        // Only use shift optimization for arrays of primitives
-        const hasPrimitiveElements = value.length === 0 || !shouldFlatten(value[0]);
-        if (hasPrimitiveElements && oldArr && oldArr.length > 0 && value.length > 0) {
-          const shift = detectArrayShiftBoth(oldArr, value);
-          const ctx = this._buildShiftContext();
-          if (shift.direction === "left") {
-            applyArrayShiftLeft(ctx, key, oldArr, value, shift.count);
-            return;
-          }
-          if (shift.direction === "right") {
-            applyArrayShiftRight(ctx, key, oldArr, value, shift.count);
-            return;
-          }
-        }
-        this._previousArrays.set(key, [...value]);
-      }
-
-      const flattened = flattenValue(key, value);
-      const newKeys = new Set(flattened.keys());
-      const oldKeys = this._flattenedKeys.get(key);
-      let needsResync = false;
-      if (oldKeys) {
-        for (const oldPath of oldKeys) {
-          if (!newKeys.has(oldPath)) {
-            if (isArrayIndexKey(key, oldPath)) continue; // stale array index — client uses .length
-            this._sessionEntries.delete(oldPath);
-            needsResync = true;
-          }
-        }
-      }
-      this._flattenedKeys.set(key, newKeys);
-      for (const [path, leaf] of flattened) {
-        this._setLeaf(path, leaf);
-      }
-      if (needsResync) this._triggerSessionResync();
-      return;
-    }
-    this._setLeaf(key, value);
-  }
-
-  private _buildShiftContext(): ArrayShiftContext {
-    return {
-      getEntry: (key) => this._sessionEntries.get(key),
-      setEntryValue: (key, value) => { const e = this._sessionEntries.get(key); if (e) e.value = value; },
-      setLeaf: (key, value) => this._setLeaf(key, value),
-      enqueue: (frame) => { if (this._sessionEnqueue) this._sessionEnqueue(frame); },
-      setFlattenedKeys: (key, keys) => this._flattenedKeys.set(key, keys),
-      setPreviousArray: (key, arr) => this._previousArrays.set(key, arr),
-    };
-  }
-
-  private _setLeaf(key: string, value: unknown): void {
-    validateKeyPath(key);
-    const newType = detectDataType(value);
-    serialize(newType, value);
-
-    const existing = this._sessionEntries.get(key);
-
-    if (!existing) {
-      const entry: KeyEntry = {
-        keyId: this._nextKeyId++,
-        path: key, type: newType, value,
-      };
-      this._sessionEntries.set(key, entry);
-      if (this._sessionEnqueue) {
-        this._sessionEnqueue({ frameType: FrameType.ServerKeyRegistration, keyId: entry.keyId, dataType: entry.type, payload: entry.path });
-        this._sessionEnqueue({ frameType: FrameType.ServerSync, keyId: 0, dataType: DataType.Null, payload: null });
-        this._sessionEnqueue({ frameType: FrameType.ServerValue, keyId: entry.keyId, dataType: entry.type, payload: entry.value });
-      }
-      return;
-    }
-
-    if (existing.type !== newType) {
-      existing.type = newType;
-      existing.value = value;
-      this._triggerSessionResync();
-      return;
-    }
-
-    if (existing.value === value) return;
-
-    existing.value = value;
-    if (this._sessionEnqueue) {
-      this._sessionEnqueue({
-        frameType: FrameType.ServerValue,
-        keyId: existing.keyId,
-        dataType: existing.type,
-        payload: value,
-      });
-    }
+    this._flatState.set(key, value);
   }
 
   get(key: string): unknown {
-    const entry = this._sessionEntries.get(key);
-    return entry ? entry.value : undefined;
+    return this._flatState ? this._flatState.get(key) : undefined;
   }
 
   get keys(): string[] {
-    return Array.from(this._sessionEntries.keys());
+    return this._flatState ? this._flatState.keys : [];
   }
 
   clearKey(key: string): void;
   clearKey(): void;
   clearKey(key?: string): void {
-    if (!this._sessionBound) return;
+    if (!this._sessionBound || !this._flatState) return;
     if (key !== undefined) {
-      const flatKeys = this._flattenedKeys.get(key);
-      if (flatKeys) {
-        for (const path of flatKeys) this._sessionEntries.delete(path);
-        this._flattenedKeys.delete(key);
-        this._previousArrays.delete(key);
-        this._triggerSessionResync();
-      } else if (this._sessionEntries.delete(key)) {
-        this._previousArrays.delete(key);
-        this._triggerSessionResync();
-      }
+      this._flatState.clear(key);
     } else {
-      if (this._sessionEntries.size > 0) {
-        this._sessionEntries.clear();
-        this._flattenedKeys.clear();
-        this._previousArrays.clear();
-        this._triggerSessionResync();
-      }
+      this._flatState.clear();
     }
   }
 
@@ -255,6 +134,12 @@ export class DanWebSocketSession {
   _bindSessionTX(enqueue: (frame: Frame) => void): void {
     this._sessionEnqueue = enqueue;
     this._sessionBound = true;
+    this._flatState = new FlatStateManager({
+      allocateKeyId: () => this._nextKeyId++,
+      enqueue,
+      onResync: () => this._triggerSessionResync(),
+      wirePrefix: "",
+    });
   }
 
   /** @internal */
@@ -397,13 +282,10 @@ export class DanWebSocketSession {
     });
 
     // Key registrations: flat session entries
-    for (const entry of this._sessionEntries.values()) {
-      this._sessionEnqueue({
-        frameType: FrameType.ServerKeyRegistration,
-        keyId: entry.keyId,
-        dataType: entry.type,
-        payload: entry.path,
-      });
+    if (this._flatState) {
+      for (const f of this._flatState.buildKeyFrames()) {
+        this._sessionEnqueue(f);
+      }
     }
 
     // Key registrations: topic payload entries
@@ -420,14 +302,9 @@ export class DanWebSocketSession {
     });
 
     // Values: flat session entries
-    for (const entry of this._sessionEntries.values()) {
-      if (entry.value !== undefined) {
-        this._sessionEnqueue({
-          frameType: FrameType.ServerValue,
-          keyId: entry.keyId,
-          dataType: entry.type,
-          payload: entry.value,
-        });
+    if (this._flatState) {
+      for (const f of this._flatState.buildValueFrames()) {
+        this._sessionEnqueue(f);
       }
     }
 
@@ -446,7 +323,9 @@ export class DanWebSocketSession {
 
   private _emit<T extends unknown[]>(callbacks: Array<(...args: T) => void>, ...args: T): void {
     for (const cb of callbacks) {
-      try { cb(...args); } catch {}
+      try { cb(...args); } catch (e) {
+        if (typeof console !== "undefined") console.warn("[dan-ws session] callback error", e);
+      }
     }
   }
 
