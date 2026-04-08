@@ -118,6 +118,28 @@ export function serialize(dataType: DataType, value: unknown): Uint8Array {
       return _sharedBytes.slice(0, 8);
     }
 
+    case DataType.VarInteger: {
+      if (typeof value !== "number") {
+        throw new DanWSError("INVALID_VALUE_TYPE", `VarInteger requires number, got ${typeof value}`);
+      }
+      return serializeVarInteger(value as number);
+    }
+
+    case DataType.VarDouble: {
+      if (typeof value !== "number") {
+        throw new DanWSError("INVALID_VALUE_TYPE", `VarDouble requires number, got ${typeof value}`);
+      }
+      return serializeVarDouble(value);
+    }
+
+    case DataType.VarFloat: {
+      // JS never produces VarFloat, but allow serialization for completeness
+      if (typeof value !== "number") {
+        throw new DanWSError("INVALID_VALUE_TYPE", `VarFloat requires number, got ${typeof value}`);
+      }
+      return serializeVarFloat(value);
+    }
+
     default:
       throw new DanWSError("UNKNOWN_DATA_TYPE", `Unknown data type: 0x${(dataType as number).toString(16)}`);
   }
@@ -178,7 +200,204 @@ export function deserialize(dataType: DataType, payload: Uint8Array): unknown {
       return new Date(Number(ms));
     }
 
+    case DataType.VarInteger:
+      return deserializeVarInteger(payload);
+
+    case DataType.VarDouble:
+      return deserializeVarDouble(payload);
+
+    case DataType.VarFloat:
+      return deserializeVarFloat(payload);
+
     default:
       throw new DanWSError("UNKNOWN_DATA_TYPE", `Unknown data type: 0x${(dataType as number).toString(16)}`);
   }
+}
+
+// --- Shared VarInt helpers ---
+
+function encodeVarInt(value: number): Uint8Array {
+  if (value === 0) return new Uint8Array([0]);
+  const bytes: number[] = [];
+  while (value > 0) {
+    let byte = value & 0x7F;
+    value = Math.floor(value / 128);
+    if (value > 0) byte |= 0x80;
+    bytes.push(byte);
+  }
+  return new Uint8Array(bytes);
+}
+
+function decodeVarIntFromPayload(payload: Uint8Array, offset: number = 0): number {
+  let value = 0;
+  let shift = 0;
+  let i = offset;
+  while (i < payload.length) {
+    const byte = payload[i];
+    value += (byte & 0x7F) * Math.pow(2, shift);
+    shift += 7;
+    i++;
+    if ((byte & 0x80) === 0) break;
+  }
+  return value;
+}
+
+// --- VarInteger (0x0d) helpers ---
+
+function serializeVarInteger(value: number): Uint8Array {
+  // Zigzag encode: maps signed to unsigned
+  // 0->0, -1->1, 1->2, -2->3, 2->4, ...
+  const zigzag = value >= 0 ? value * 2 : (-value) * 2 - 1;
+  return encodeVarInt(zigzag);
+}
+
+function deserializeVarInteger(payload: Uint8Array): number {
+  if (payload.length === 0) {
+    throw new DanWSError("PAYLOAD_SIZE_MISMATCH", "VarInteger requires at least 1 byte");
+  }
+  const zigzag = decodeVarIntFromPayload(payload);
+  // Zigzag decode: (zigzag >>> 1) ^ -(zigzag & 1)
+  const n = (zigzag & 1) ? -Math.floor(zigzag / 2) - 1 : Math.floor(zigzag / 2);
+  return n;
+}
+
+// --- VarDouble (0x0e) helpers ---
+
+function fallbackFloat64(value: number): Uint8Array {
+  const result = new Uint8Array(9);
+  result[0] = 0x80;
+  const view = new DataView(result.buffer, 1, 8);
+  view.setFloat64(0, value, false);
+  return result;
+}
+
+function serializeVarDouble(value: number): Uint8Array {
+  // Fallback cases: NaN, Infinity, -Infinity, -0, or unrepresentable
+  if (!Number.isFinite(value) || Object.is(value, -0)) {
+    return fallbackFloat64(value);
+  }
+
+  // Determine scale via string representation (avoids floating-point drift)
+  const abs = Math.abs(value);
+  let scale = 0;
+  let mantissa = abs;
+  const str = abs.toString();
+  const dotIdx = str.indexOf(".");
+  if (dotIdx !== -1) {
+    // Check for scientific notation (e.g. 1e-7)
+    if (str.includes("e") || str.includes("E")) {
+      return fallbackFloat64(value);
+    }
+    scale = str.length - dotIdx - 1;
+    if (scale > 63) return fallbackFloat64(value);
+    mantissa = Number(str.replace(".", ""));
+  }
+
+  // If mantissa exceeds safe integer, fallback
+  if (!Number.isFinite(mantissa) || mantissa > Number.MAX_SAFE_INTEGER) {
+    return fallbackFloat64(value);
+  }
+
+  const negative = value < 0;
+  const firstByte = negative ? (scale + 64) : scale;
+  const varint = encodeVarInt(mantissa);
+  const result = new Uint8Array(1 + varint.length);
+  result[0] = firstByte;
+  result.set(varint, 1);
+  return result;
+}
+
+function deserializeVarDouble(payload: Uint8Array): number {
+  if (payload.length === 0) {
+    throw new DanWSError("PAYLOAD_SIZE_MISMATCH", "VarDouble requires at least 1 byte");
+  }
+
+  const firstByte = payload[0];
+
+  if (firstByte === 0x80) {
+    // Fallback Float64
+    if (payload.length < 9) {
+      throw new DanWSError("PAYLOAD_SIZE_MISMATCH", "VarDouble fallback requires 9 bytes");
+    }
+    const view = new DataView(payload.buffer, payload.byteOffset + 1, 8);
+    return view.getFloat64(0, false);
+  }
+
+  const negative = firstByte >= 64;
+  const scale = negative ? (firstByte - 64) : firstByte;
+
+  const mantissa = decodeVarIntFromPayload(payload, 1);
+
+  let result = mantissa / Math.pow(10, scale);
+  if (negative) result = -result;
+  return result;
+}
+
+// --- VarFloat (0x0f) helpers ---
+
+function fallbackFloat32(value: number): Uint8Array {
+  const result = new Uint8Array(5);
+  result[0] = 0x80;
+  const view = new DataView(result.buffer, 1, 4);
+  view.setFloat32(0, value, false);
+  return result;
+}
+
+function serializeVarFloat(value: number): Uint8Array {
+  // Same as VarDouble but fallback uses Float32 instead of Float64
+  if (!Number.isFinite(value) || Object.is(value, -0)) {
+    return fallbackFloat32(value);
+  }
+
+  const abs = Math.abs(value);
+  let scale = 0;
+  let mantissa = abs;
+  const str = abs.toString();
+  const dotIdx = str.indexOf(".");
+  if (dotIdx !== -1) {
+    if (str.includes("e") || str.includes("E")) {
+      return fallbackFloat32(value);
+    }
+    scale = str.length - dotIdx - 1;
+    if (scale > 63) return fallbackFloat32(value);
+    mantissa = Number(str.replace(".", ""));
+  }
+
+  if (!Number.isFinite(mantissa) || mantissa > Number.MAX_SAFE_INTEGER) {
+    return fallbackFloat32(value);
+  }
+
+  const negative = value < 0;
+  const firstByte = negative ? (scale + 64) : scale;
+  const varint = encodeVarInt(mantissa);
+  const result = new Uint8Array(1 + varint.length);
+  result[0] = firstByte;
+  result.set(varint, 1);
+  return result;
+}
+
+function deserializeVarFloat(payload: Uint8Array): number {
+  if (payload.length === 0) {
+    throw new DanWSError("PAYLOAD_SIZE_MISMATCH", "VarFloat requires at least 1 byte");
+  }
+
+  const firstByte = payload[0];
+
+  if (firstByte === 0x80) {
+    // Fallback Float32 (4 bytes instead of 8)
+    if (payload.length < 5) {
+      throw new DanWSError("PAYLOAD_SIZE_MISMATCH", "VarFloat fallback requires 5 bytes");
+    }
+    const view = new DataView(payload.buffer, payload.byteOffset + 1, 4);
+    return view.getFloat32(0, false);
+  }
+
+  const negative = firstByte >= 64;
+  const scale = negative ? (firstByte - 64) : firstByte;
+
+  const mantissa = decodeVarIntFromPayload(payload, 1);
+
+  let result = mantissa / Math.pow(10, scale);
+  if (negative) result = -result;
+  return result;
 }

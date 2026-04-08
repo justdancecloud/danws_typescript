@@ -64,6 +64,7 @@ export class DanWebSocketClient {
   private _registry = new KeyRegistry();
   private _store = new StateStore();
   private _pendingValues = new Map<number, Frame>();
+  private _readyDeferred = false;
   private _inboundRecovery = new RecoveryController();
 
   // Topic state (client→server)
@@ -408,19 +409,25 @@ export class DanWebSocketClient {
           }
         }
 
-        // Check if this is the initial sync completing
-        if (this._state === "synchronizing") {
-          this._state = "ready";
-          this._inboundRecovery.complete();
-          this._emit(this._onReady);
-          if (this._reconnectEngine.isActive) {
-            this._reconnectEngine.stop();
-            this._emit(this._onReconnect);
-          }
-          // Resend topic subscriptions after (re)connect
-          if (this._subscriptions.size > 0) {
-            this._sendTopicSync();
-          }
+        // Check if this is the initial sync completing.
+        // Defer ready to next microtask so all frames in the same batch are processed first.
+        if (this._state === "synchronizing" && !this._readyDeferred) {
+          this._readyDeferred = true;
+          queueMicrotask(() => {
+            this._readyDeferred = false;
+            if (this._state !== "synchronizing") return; // already transitioned
+            this._state = "ready";
+            this._inboundRecovery.complete();
+            this._emit(this._onReady);
+            if (this._reconnectEngine.isActive) {
+              this._reconnectEngine.stop();
+              this._emit(this._onReconnect);
+            }
+            // Resend topic subscriptions after (re)connect
+            if (this._subscriptions.size > 0) {
+              this._sendTopicSync();
+            }
+          });
         }
         break;
       }
@@ -579,6 +586,7 @@ export class DanWebSocketClient {
         this._store.clear();
         this._pendingValues.clear();
         this._topicKeyCache.clear();
+        this._readyDeferred = false;
         this._state = "synchronizing";
         break;
 

@@ -1,22 +1,22 @@
 {
   "name": "dan-websocket",
-  "version": "2.3.1",
+  "version": "2.4.0",
   "description": "Lightweight binary protocol for real-time state synchronization",
   "type": "module",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.mjs",
+      "import": "./dist/index.js",
       "require": "./dist/index.cjs"
     },
     "./server": {
       "types": "./dist/server.d.ts",
-      "import": "./dist/server.mjs",
+      "import": "./dist/server.js",
       "require": "./dist/server.cjs"
     },
     "./protocol": {
       "types": "./dist/protocol.d.ts",
-      "import": "./dist/protocol.mjs",
+      "import": "./dist/protocol.js",
       "require": "./dist/protocol.cjs"
     }
   },

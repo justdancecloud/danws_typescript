@@ -18,6 +18,9 @@ export enum DataType {
   String = 0x0a,
   Binary = 0x0b,
   Timestamp = 0x0c,
+  VarInteger = 0x0d,
+  VarDouble = 0x0e,
+  VarFloat = 0x0f,
 }
 
 export enum FrameType {
@@ -100,4 +103,7 @@ export const DATA_TYPE_SIZES: Record<DataType, number> = {
   [DataType.String]: -1,
   [DataType.Binary]: -1,
   [DataType.Timestamp]: 8,
+  [DataType.VarInteger]: -1,
+  [DataType.VarDouble]: -1,
+  [DataType.VarFloat]: -1,
 };

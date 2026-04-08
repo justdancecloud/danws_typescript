@@ -14,7 +14,7 @@ DanProtocol is a **lightweight binary protocol** designed for pushing real-time 
 |----------|-----|
 | **Binary wire format** | Minimal bandwidth. A boolean update is ~13 bytes total (vs ~30+ bytes for JSON). |
 | **DLE-based framing** | Self-synchronizing frames without length prefixes. Robust on unreliable streams. |
-| **Auto-typed** | No schema declaration needed. 13 types detected from values. |
+| **Auto-typed** | No schema declaration needed. 16 types detected from values. |
 | **4-byte KeyID** | Supports 4B+ unique keys for auto-flatten at scale. |
 | **Auto-flatten** | Objects/arrays expand into dot-path leaf keys at API layer. Only changed fields go on wire. |
 | **Principal-based** | State is per-authenticated-user, not per-connection. Multiple devices share one state. |
@@ -279,6 +279,77 @@ Types are auto-detected from application values. No explicit declaration needed.
 | `0x0A` | String | var | `string` / `String` |
 | `0x0B` | Binary | var | `Uint8Array` / `byte[]` |
 | `0x0C` | Timestamp | 8 | `Date` / `Date` |
+| `0x0D` | VarInteger | var | `number` (integer) / `Integer`, `Long` |
+| `0x0E` | VarDouble | var | `number` (non-integer) / `Double` |
+| `0x0F` | VarFloat | var | — / `Float` (decode only in JS) |
+
+### VarInteger Encoding (0x0D)
+
+A compact variable-length encoding for integer values using zigzag + unsigned VarInt.
+
+**Zigzag encoding:** Maps signed integers to unsigned integers:
+- `(n >= 0) ? n * 2 : (-n) * 2 - 1`
+- `0->0, -1->1, 1->2, -2->3, 2->4, ...`
+
+The zigzag-encoded value is then written as an unsigned VarInt (protobuf-style, 7 bits per byte, MSB = continuation bit).
+
+**VarInt encoding** (protobuf-style unsigned):
+- 7 bits per byte, MSB = continuation bit
+- `0-127`: 1 byte `[0XXXXXXX]`
+- `128-16383`: 2 bytes `[1XXXXXXX] [0XXXXXXX]`
+- Up to 8 bytes for large values.
+
+**Zigzag decode:** `(zigzag & 1) ? -floor(zigzag / 2) - 1 : floor(zigzag / 2)`
+
+**Examples:**
+
+| Value | Zigzag | Bytes | Description |
+|-------|--------|-------|-------------|
+| `0` | 0 | `00` | 1 byte |
+| `1` | 2 | `02` | 1 byte |
+| `-1` | 1 | `01` | 1 byte |
+| `42` | 84 | `54` | 1 byte |
+| `-42` | 83 | `53` | 1 byte |
+| `300` | 600 | `D8 04` | 2 bytes |
+
+### VarDouble Encoding (0x0E)
+
+A compact variable-length encoding for non-integer numbers using scale + mantissa.
+
+**First byte layout: `[FSSS SSSS]`**
+
+- **F** (bit 7) = fallback flag. When set (`0x80`), the next 8 bytes are a raw Float64 (big-endian).
+- **SSSSSSS** (bits 6-0) = sign + scale:
+  - `0~63`: positive number, scale = value. Followed by unsigned VarInt mantissa.
+  - `64~127`: negative number, scale = value - 64. Followed by unsigned VarInt mantissa.
+
+**VarInt encoding** (protobuf-style unsigned):
+- 7 bits per byte, MSB = continuation bit
+- `0-127`: 1 byte `[0XXXXXXX]`
+- `128-16383`: 2 bytes `[1XXXXXXX] [0XXXXXXX]`
+- Up to 8 bytes for large mantissas.
+
+**Reconstructing the number:** `(-1 if negative) * mantissa / 10^scale`
+
+**Fallback mode (F=1):** Used for NaN, Infinity, -Infinity, -0, scientific notation, scale > 63, and numbers whose decimal mantissa exceeds `Number.MAX_SAFE_INTEGER`. Byte `0x80` followed by 8-byte IEEE 754 Float64 (big-endian). Total: 9 bytes.
+
+**Examples:**
+
+| Value | Bytes | Description |
+|-------|-------|-------------|
+| `3.14` | `02 BA 02` | scale=2, positive, mantissa=314 |
+| `-7.5` | `41 4B` | scale=1, negative, mantissa=75 |
+| `0.001` | `03 01` | scale=3, positive, mantissa=1 |
+| `Math.PI` | `80 [8 bytes]` | fallback Float64 (9 bytes) |
+
+### VarFloat Encoding (0x0F)
+
+Same encoding as VarDouble, except the fallback uses 4-byte Float32 instead of 8-byte Float64.
+
+- **Fallback (F=1):** Byte `0x80` followed by 4-byte IEEE 754 Float32 (big-endian). Total: 5 bytes.
+- **Non-fallback:** Identical to VarDouble (scale + mantissa).
+
+JS/TS never auto-detects as VarFloat (no float32 distinction in JS), but must be able to decode it for cross-language compatibility with Java `Float` values.
 
 ### Auto-Detection Rules
 
@@ -286,9 +357,9 @@ Types are auto-detected from application values. No explicit declaration needed.
 |-------|-----------|
 | `null` | Null |
 | `true` / `false` | Bool |
-| JS `number` / Java `Double` | Float64 |
-| Java `Integer` | Int32 |
-| Java `Float` | Float32 |
+| JS `number` (integer) / Java `Integer` | VarInteger |
+| JS `number` (non-integer) / Java `Double` | VarDouble |
+| Java `Float` | VarFloat |
 | JS `bigint` >= 0 / Java `Long` >= 0 | Uint64 |
 | JS `bigint` < 0 / Java `Long` < 0 | Int64 |
 | `string` / `String` | String |
