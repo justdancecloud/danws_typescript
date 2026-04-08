@@ -4,7 +4,7 @@
 
 If you discover a security vulnerability, please report it privately:
 
-- **Email:** justdancecloud@users.noreply.github.com
+- **GitHub Issues:** https://github.com/justdancecloud/danws_typescript/issues (preferred)
 - **GitHub Issues:** For non-sensitive issues, open an issue at https://github.com/justdancecloud/danws_typescript/issues
 
 Please include:
