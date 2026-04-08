@@ -1,4 +1,4 @@
-# DanProtocol v3.3 Specification
+# DanProtocol v3.4 Specification
 
 > April 2026 | Real-Time State Synchronization with Auto-Flatten & Array Operations
 
@@ -128,7 +128,50 @@ Payload: 16-byte UUIDv7 + optional 2-byte protocol version (major, minor). Serve
 
 > **Note**: `0x10` is reserved (DLE control character). AuthFail uses `0x11` to avoid collision.
 
-### 3.7 Array Operations
+### 3.7 Key Lifecycle (NEW in v3.4)
+
+| Code | Name | Direction | Payload |
+|------|------|-----------|---------|
+| `0x22` | ServerKeyDelete | S→C | Signal (no payload) |
+| `0x23` | ClientKeyRequest | C→S | Signal (no payload) |
+
+**ServerKeyDelete (0x22):**
+
+Incremental key deletion. The server sends this instead of a full ServerReset+resync when individual keys are removed.
+
+- **KeyID**: the keyId being deleted
+- **DataType**: Null (0x00) — signal frame
+- **Payload**: none
+
+**Client action on receiving ServerKeyDelete(keyId):**
+1. Remove keyId from key registry
+2. Remove keyId from value store
+3. Fire onReceive(path, undefined) to notify listeners of deletion
+
+**Use cases:**
+- `server.clear("user")` — sends ServerKeyDelete for each flattened sub-key
+- Type change (e.g., number→string) — sends ServerKeyDelete(old keyId) + ServerKeyRegistration(new keyId) + ServerSync + ServerValue
+
+**ClientKeyRequest (0x23):**
+
+Single-key recovery. The client sends this when it receives a ServerValue for an unknown keyId, instead of requesting a full state resync.
+
+- **KeyID**: the keyId the client needs information about
+- **DataType**: Null (0x00) — signal frame
+- **Payload**: none
+
+**Server action on receiving ClientKeyRequest(keyId):**
+1. Find the keyId in current state (principal TX, session flat state, or topic payloads)
+2. Send: ServerKeyRegistration(keyId, path, type) + ServerSync + ServerValue(keyId, value)
+3. If keyId not found, no response (client will timeout and may request full resync)
+
+**Client behavior for unknown keyId:**
+1. Receive ServerValue(keyId=X) but keyId X is not in registry
+2. Send ClientKeyRequest(keyId=X)
+3. Buffer the value in pendingValues map
+4. When ServerKeyRegistration arrives for keyId X, apply the buffered value immediately
+
+### 3.8 Array Operations
 
 | Code | Name | Direction | Payload |
 |------|------|-----------|---------|
