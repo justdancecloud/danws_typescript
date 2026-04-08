@@ -173,4 +173,9 @@ export class PrincipalManager {
     this._sessionCounts.set(principal, count);
     return false;
   }
+
+  /** @internal — Check if principal has active sessions (without modifying count). */
+  _hasActiveSessions(principal: string): boolean {
+    return (this._sessionCounts.get(principal) ?? 0) > 0;
+  }
 }

@@ -8,14 +8,14 @@ export function createStateProxy(
   keysFn: () => string[],
   prefix = "",
 ): Record<string, any> {
-  // Prefix index with dirty-flag caching.
-  // Rebuilt only when key count changes (cheap staleness check).
+  // Prefix index with reference-identity caching.
+  // Rebuilt when the keys array reference changes (covers add, delete, and swap).
   let _cachedPrefixSet: Set<string> | null = null;
-  let _cachedKeyCount = -1;
+  let _lastKeysRef: string[] | null = null;
 
   function prefixSet(): Set<string> {
     const keys = keysFn();
-    if (_cachedPrefixSet && keys.length === _cachedKeyCount) return _cachedPrefixSet;
+    if (_cachedPrefixSet && keys === _lastKeysRef) return _cachedPrefixSet;
     const set = new Set<string>();
     for (const k of keys) {
       let dot = k.indexOf(".");
@@ -25,7 +25,7 @@ export function createStateProxy(
       }
     }
     _cachedPrefixSet = set;
-    _cachedKeyCount = keys.length;
+    _lastKeysRef = keys;
     return set;
   }
 

@@ -21,6 +21,8 @@ export interface ServerOptions {
   path?: string;
   mode?: ServerMode;
   session?: { ttl?: number };
+  /** Time in ms before evicting principal data after all sessions disconnect (default: 300000 = 5min). Set 0 to disable auto-eviction. */
+  principalEvictionTtl?: number;
   debug?: boolean | ((msg: string, err?: Error) => void);
   flushIntervalMs?: number;
   /** Max WebSocket message size in bytes (default: 1MB). Rejects oversized incoming messages. */
@@ -68,10 +70,12 @@ export class DanWebSocketServer {
   private _flushIntervalMs: number | undefined;
   private _maxValueSize: number;
   private _maxMessageSize: number;
+  private _principalEvictionTtl: number;
 
   private _sessions = new Map<string, InternalSession>();
   private _tmpSessions = new Map<string, InternalSession>();
   private _principalIndex = new Map<string, Set<InternalSession>>();
+  private _principalEvictionTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   // Callbacks (backward compat)
   private _onConnection: Array<(session: DanWebSocketSession) => void> = [];
@@ -98,6 +102,7 @@ export class DanWebSocketServer {
     this._debug = options.debug ?? false;
     this._flushIntervalMs = options.flushIntervalMs;
     this._maxValueSize = options.maxValueSize ?? 65_536;
+    this._principalEvictionTtl = options.principalEvictionTtl ?? 300_000;
 
     // Topic namespace
     const ns: TopicNamespaceInternal = {
@@ -245,6 +250,8 @@ export class DanWebSocketServer {
     this._sessions.clear();
     this._tmpSessions.clear();
     this._principalIndex.clear();
+    for (const timer of this._principalEvictionTimers.values()) clearTimeout(timer);
+    this._principalEvictionTimers.clear();
     this._wss.close();
   }
 
@@ -465,6 +472,7 @@ export class DanWebSocketServer {
       const effectivePrincipal = this.mode === "broadcast" ? BROADCAST_PRINCIPAL : principal;
       const ptx = this._principals.principal(effectivePrincipal);
       this._principals._addSession(effectivePrincipal);
+      this._cancelPrincipalEviction(effectivePrincipal);
       this._indexAddSession(effectivePrincipal, internal);
 
       internal.session._setTxProviders(
@@ -615,11 +623,36 @@ export class DanWebSocketServer {
       const principal = internal.session.principal;
       if (principal && !this._isTopicMode) {
         const effectivePrincipal = this.mode === "broadcast" ? BROADCAST_PRINCIPAL : principal;
-        this._principals._removeSession(effectivePrincipal);
+        const noSessions = this._principals._removeSession(effectivePrincipal);
         this._indexRemoveSession(effectivePrincipal, internal);
+        if (noSessions) {
+          this._schedulePrincipalEviction(effectivePrincipal);
+        }
       }
       for (const cb of this._onSessionExpired) { try { cb(internal.session); } catch (e) { this._log("onSessionExpired callback error", e as Error); } }
     }, this._ttl);
+  }
+
+  private _schedulePrincipalEviction(principal: string): void {
+    if (this._principalEvictionTtl <= 0) return; // disabled
+    const evictionDelay = this._principalEvictionTtl;
+    this._principalEvictionTimers.set(principal, setTimeout(() => {
+      this._principalEvictionTimers.delete(principal);
+      // Double-check no sessions reconnected during eviction delay
+      if (this._principals._hasActiveSessions(principal)) {
+        return;
+      }
+      this._log(`Evicting principal "${principal}" data (no sessions for ${evictionDelay}ms)`);
+      this._principals.delete(principal);
+    }, evictionDelay));
+  }
+
+  private _cancelPrincipalEviction(principal: string): void {
+    const timer = this._principalEvictionTimers.get(principal);
+    if (timer) {
+      clearTimeout(timer);
+      this._principalEvictionTimers.delete(principal);
+    }
   }
 
   private _sendFrame(internal: InternalSession, frame: Frame): void {
