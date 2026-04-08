@@ -3,6 +3,8 @@ import type { Frame } from "./types.js";
 import { serialize, deserialize } from "./serializer.js";
 import { dleEncode, dleDecode } from "./dle.js";
 
+const _textEncoder = new TextEncoder();
+
 /**
  * Encode a single Frame into bytes with DLE STX/ETX framing and DLE escaping.
  */
@@ -12,7 +14,7 @@ export function encode(frame: Frame): Uint8Array {
 
   if (isKeyRegistrationFrame(frame.frameType)) {
     // Key registration: payload is UTF-8 keyPath string
-    rawPayload = new TextEncoder().encode(frame.payload as string);
+    rawPayload = _textEncoder.encode(frame.payload as string);
   } else if (isSignalFrame(frame.frameType)) {
     // Signal frames: no payload
     rawPayload = new Uint8Array(0);
@@ -49,13 +51,20 @@ export function encode(frame: Frame): Uint8Array {
  * Encode multiple frames and concatenate into a single buffer.
  */
 export function encodeBatch(frames: Frame[]): Uint8Array {
-  const encoded = frames.map(encode);
-  const totalLength = encoded.reduce((sum, buf) => sum + buf.length, 0);
+  // Single-pass: encode all frames, track total length, then copy into one buffer
+  const len = frames.length;
+  const encoded = new Array<Uint8Array>(len);
+  let totalLength = 0;
+  for (let i = 0; i < len; i++) {
+    const buf = encode(frames[i]);
+    encoded[i] = buf;
+    totalLength += buf.length;
+  }
   const result = new Uint8Array(totalLength);
   let offset = 0;
-  for (const buf of encoded) {
-    result.set(buf, offset);
-    offset += buf.length;
+  for (let i = 0; i < len; i++) {
+    result.set(encoded[i], offset);
+    offset += encoded[i].length;
   }
   return result;
 }

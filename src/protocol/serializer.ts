@@ -3,6 +3,11 @@ import { DataType, DATA_TYPE_SIZES, DanWSError } from "./types.js";
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder("utf-8", { fatal: true });
 
+// Reusable buffer for numeric serialization — eliminates 2 of 3 allocations per numeric value
+const _sharedBuf = new ArrayBuffer(8);
+const _sharedView = new DataView(_sharedBuf);
+const _sharedBytes = new Uint8Array(_sharedBuf);
+
 export function serialize(dataType: DataType, value: unknown): Uint8Array {
   switch (dataType) {
     case DataType.Null:
@@ -26,18 +31,16 @@ export function serialize(dataType: DataType, value: unknown): Uint8Array {
       if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 0xffff) {
         throw new DanWSError("INVALID_VALUE_TYPE", `Uint16 requires integer 0-65535, got ${value}`);
       }
-      const buf = new ArrayBuffer(2);
-      new DataView(buf).setUint16(0, value, false);
-      return new Uint8Array(buf);
+      _sharedView.setUint16(0, value, false);
+      return new Uint8Array(_sharedBytes.buffer, 0, 2).slice();
     }
 
     case DataType.Uint32: {
       if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 0xffffffff) {
         throw new DanWSError("INVALID_VALUE_TYPE", `Uint32 requires integer 0-4294967295, got ${value}`);
       }
-      const buf = new ArrayBuffer(4);
-      new DataView(buf).setUint32(0, value, false);
-      return new Uint8Array(buf);
+      _sharedView.setUint32(0, value, false);
+      return new Uint8Array(_sharedBytes.buffer, 0, 4).slice();
     }
 
     case DataType.Uint64: {
@@ -47,18 +50,16 @@ export function serialize(dataType: DataType, value: unknown): Uint8Array {
       if (value < 0n || value > 0xffffffffffffffffn) {
         throw new DanWSError("INVALID_VALUE_TYPE", `Uint64 out of range: ${value}`);
       }
-      const buf = new ArrayBuffer(8);
-      new DataView(buf).setBigUint64(0, value, false);
-      return new Uint8Array(buf);
+      _sharedView.setBigUint64(0, value, false);
+      return _sharedBytes.slice(0, 8);
     }
 
     case DataType.Int32: {
       if (typeof value !== "number" || !Number.isInteger(value) || value < -2147483648 || value > 2147483647) {
         throw new DanWSError("INVALID_VALUE_TYPE", `Int32 requires integer -2^31 to 2^31-1, got ${value}`);
       }
-      const buf = new ArrayBuffer(4);
-      new DataView(buf).setInt32(0, value, false);
-      return new Uint8Array(buf);
+      _sharedView.setInt32(0, value, false);
+      return _sharedBytes.slice(0, 4);
     }
 
     case DataType.Int64: {
@@ -70,27 +71,24 @@ export function serialize(dataType: DataType, value: unknown): Uint8Array {
       if (value < min || value > max) {
         throw new DanWSError("INVALID_VALUE_TYPE", `Int64 out of range: ${value}`);
       }
-      const buf = new ArrayBuffer(8);
-      new DataView(buf).setBigInt64(0, value, false);
-      return new Uint8Array(buf);
+      _sharedView.setBigInt64(0, value, false);
+      return _sharedBytes.slice(0, 8);
     }
 
     case DataType.Float32: {
       if (typeof value !== "number") {
         throw new DanWSError("INVALID_VALUE_TYPE", `Float32 requires number, got ${typeof value}`);
       }
-      const buf = new ArrayBuffer(4);
-      new DataView(buf).setFloat32(0, value, false);
-      return new Uint8Array(buf);
+      _sharedView.setFloat32(0, value, false);
+      return _sharedBytes.slice(0, 4);
     }
 
     case DataType.Float64: {
       if (typeof value !== "number") {
         throw new DanWSError("INVALID_VALUE_TYPE", `Float64 requires number, got ${typeof value}`);
       }
-      const buf = new ArrayBuffer(8);
-      new DataView(buf).setFloat64(0, value, false);
-      return new Uint8Array(buf);
+      _sharedView.setFloat64(0, value, false);
+      return _sharedBytes.slice(0, 8);
     }
 
     case DataType.String: {
@@ -116,9 +114,8 @@ export function serialize(dataType: DataType, value: unknown): Uint8Array {
       } else {
         throw new DanWSError("INVALID_VALUE_TYPE", `Timestamp requires Date or number (unix ms)`);
       }
-      const buf = new ArrayBuffer(8);
-      new DataView(buf).setBigUint64(0, ms, false);
-      return new Uint8Array(buf);
+      _sharedView.setBigUint64(0, ms, false);
+      return _sharedBytes.slice(0, 8);
     }
 
     default:

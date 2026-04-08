@@ -32,6 +32,7 @@ export class KeyRegistry {
   private byId = new Map<number, KeyEntry>();
   private byPath = new Map<string, KeyEntry>();
   private nextId = 1;
+  private _cachedPaths: string[] | null = null;
 
   register(keys: KeyDefinition[]): void {
     // Check for duplicates within the input
@@ -52,6 +53,7 @@ export class KeyRegistry {
       this.byPath.set(key.path, entry);
       this.nextId++;
     }
+    this._cachedPaths = null;
   }
 
   /**
@@ -65,6 +67,7 @@ export class KeyRegistry {
     if (keyId >= this.nextId) {
       this.nextId = keyId + 1;
     }
+    this._cachedPaths = null;
   }
 
   getByKeyId(keyId: number): KeyEntry | undefined {
@@ -88,6 +91,7 @@ export class KeyRegistry {
     if (!entry) return false;
     this.byId.delete(keyId);
     this.byPath.delete(entry.path);
+    this._cachedPaths = null;
     return true;
   }
 
@@ -96,7 +100,10 @@ export class KeyRegistry {
   }
 
   get paths(): string[] {
-    return Array.from(this.byPath.keys());
+    if (this._cachedPaths === null) {
+      this._cachedPaths = Array.from(this.byPath.keys());
+    }
+    return this._cachedPaths;
   }
 
   entries(): IterableIterator<KeyEntry> {
@@ -107,5 +114,6 @@ export class KeyRegistry {
     this.byId.clear();
     this.byPath.clear();
     this.nextId = 1;
+    this._cachedPaths = null;
   }
 }

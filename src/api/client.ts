@@ -72,6 +72,8 @@ export class DanWebSocketClient {
   private _topicClientHandles = new Map<string, TopicClientHandle>();
   private _topicIndexMap = new Map<string, number>(); // topicName → wire index
   private _indexToTopic = new Map<number, string>(); // wire index → topicName
+  /** Cache parsed topic info per keyId to avoid regex on every ServerValue frame */
+  private _topicKeyCache = new Map<number, { topicIdx: number; userKey: string } | null>();
 
   // Connection layers
   private _bulkQueue = new BulkQueue();
@@ -209,6 +211,26 @@ export class DanWebSocketClient {
   onReconnectFailed(cb: () => void): () => void { return this._on(this._onReconnectFailed, cb); }
   onError(cb: (err: DanWSError) => void): () => void { return this._on(this._onError, cb); }
 
+  /** Parse and cache topic info for a key path. Returns cached result on subsequent calls. */
+  private _getTopicInfo(keyId: number, path: string): { topicIdx: number; userKey: string } | null {
+    let cached = this._topicKeyCache.get(keyId);
+    if (cached !== undefined) return cached;
+    // Parse "t.<idx>.<userKey>" pattern
+    if (path.length > 2 && path.charCodeAt(0) === 0x74 /* 't' */ && path.charCodeAt(1) === 0x2E /* '.' */) {
+      const secondDot = path.indexOf(".", 2);
+      if (secondDot !== -1) {
+        const idx = parseInt(path.substring(2, secondDot));
+        if (!isNaN(idx)) {
+          const info = { topicIdx: idx, userKey: path.substring(secondDot + 1) };
+          this._topicKeyCache.set(keyId, info);
+          return info;
+        }
+      }
+    }
+    this._topicKeyCache.set(keyId, null);
+    return null;
+  }
+
   // ──── Internals ────
 
   private _setupInternals(): void {
@@ -309,13 +331,12 @@ export class DanWebSocketClient {
         if (pending) {
           this._pendingValues.delete(frame.keyId);
           this._store.set(frame.keyId, pending.payload);
-          const topicMatch = keyPath.match(/^t\.(\d+)\.(.+)$/);
-          if (topicMatch) {
-            const idx = parseInt(topicMatch[1]);
-            const topicName = this._indexToTopic.get(idx);
+          const topicInfo = this._getTopicInfo(frame.keyId, keyPath);
+          if (topicInfo) {
+            const topicName = this._indexToTopic.get(topicInfo.topicIdx);
             if (topicName) {
               const handle = this._topicClientHandles.get(topicName);
-              if (handle) handle._notify(topicMatch[2], pending.payload);
+              if (handle) handle._notify(topicInfo.userKey, pending.payload);
             }
           } else {
             for (const cb of this._onReceive) {
@@ -372,14 +393,12 @@ export class DanWebSocketClient {
         const entry = this._registry.getByKeyId(frame.keyId);
         if (entry) {
           // Check if this is a topic-scoped key (t.<idx>.<userKey>)
-          const topicMatch = entry.path.match(/^t\.(\d+)\.(.+)$/);
-          if (topicMatch) {
-            const idx = parseInt(topicMatch[1]);
-            const userKey = topicMatch[2];
-            const topicName = this._indexToTopic.get(idx);
+          const topicInfo = this._getTopicInfo(frame.keyId, entry.path);
+          if (topicInfo) {
+            const topicName = this._indexToTopic.get(topicInfo.topicIdx);
             if (topicName) {
               const handle = this._topicClientHandles.get(topicName);
-              if (handle) handle._notify(userKey, frame.payload);
+              if (handle) handle._notify(topicInfo.userKey, frame.payload);
             }
           } else {
             // Global key (broadcast/principal/flat session)
@@ -411,16 +430,16 @@ export class DanWebSocketClient {
         const lengthEntry = this._registry.getByKeyId(frame.keyId);
         if (lengthEntry) {
           const lengthPath = lengthEntry.path;
-          const topicMatch = lengthPath.match(/^t\.(\d+)\.(.+)$/);
+          const topicInfo = this._getTopicInfo(frame.keyId, lengthPath);
           let prefix: string;
           let isTopic = false;
           let topicIdx = -1;
           let userPrefix = "";
 
-          if (topicMatch) {
+          if (topicInfo) {
             isTopic = true;
-            topicIdx = parseInt(topicMatch[1]);
-            const userKey = topicMatch[2];
+            topicIdx = topicInfo.topicIdx;
+            const userKey = topicInfo.userKey;
             userPrefix = userKey.slice(0, userKey.length - ".length".length);
             prefix = lengthPath.slice(0, lengthPath.length - ".length".length);
           } else {
@@ -465,16 +484,16 @@ export class DanWebSocketClient {
         const lengthEntry = this._registry.getByKeyId(frame.keyId);
         if (lengthEntry) {
           const lengthPath = lengthEntry.path;
-          const topicMatch = lengthPath.match(/^t\.(\d+)\.(.+)$/);
+          const topicInfo = this._getTopicInfo(frame.keyId, lengthPath);
           let prefix: string;
           let isTopic = false;
           let topicIdx = -1;
           let userPrefix = "";
 
-          if (topicMatch) {
+          if (topicInfo) {
             isTopic = true;
-            topicIdx = parseInt(topicMatch[1]);
-            const userKey = topicMatch[2];
+            topicIdx = topicInfo.topicIdx;
+            const userKey = topicInfo.userKey;
             userPrefix = userKey.slice(0, userKey.length - ".length".length);
             prefix = lengthPath.slice(0, lengthPath.length - ".length".length);
           } else {
@@ -534,16 +553,17 @@ export class DanWebSocketClient {
       case FrameType.ServerKeyDelete: {
         // Incremental key deletion — remove single key without full resync
         const deletedEntry = this._registry.getByKeyId(frame.keyId);
+        // Read topic info before removing from registry (cache lookup by keyId)
+        const deletedTopicInfo = deletedEntry ? this._getTopicInfo(frame.keyId, deletedEntry.path) : null;
         this._registry.removeByKeyId(frame.keyId);
         this._store.delete(frame.keyId);
+        this._topicKeyCache.delete(frame.keyId);
         if (deletedEntry) {
-          const topicMatch = deletedEntry.path.match(/^t\.(\d+)\.(.+)$/);
-          if (topicMatch) {
-            const idx = parseInt(topicMatch[1]);
-            const topicName = this._indexToTopic.get(idx);
+          if (deletedTopicInfo) {
+            const topicName = this._indexToTopic.get(deletedTopicInfo.topicIdx);
             if (topicName) {
               const handle = this._topicClientHandles.get(topicName);
-              if (handle) handle._notify(topicMatch[2], undefined);
+              if (handle) handle._notify(deletedTopicInfo.userKey, undefined);
             }
           } else {
             for (const cb of this._onReceive) {
@@ -558,6 +578,7 @@ export class DanWebSocketClient {
         this._registry.clear();
         this._store.clear();
         this._pendingValues.clear();
+        this._topicKeyCache.clear();
         this._state = "synchronizing";
         break;
 

@@ -188,56 +188,69 @@ export class FlatStateManager {
   private _setLeaf(key: string, value: unknown): boolean {
     validateKeyPath(key);
     const newType = detectDataType(value);
-    const serialized = serialize(newType, value);
-    if (this._cb.maxValueSize != null && serialized.length > this._cb.maxValueSize) {
-      throw new DanWSError("VALUE_TOO_LARGE", `Serialized value for "${key}" is ${serialized.length} bytes, exceeds maxValueSize (${this._cb.maxValueSize})`);
-    }
 
     const existing = this._entries.get(key);
 
-    if (!existing) {
-      const keyId = this._allocateKeyId();
-      this._entries.set(key, { keyId, type: newType, value });
-      this._cb.onKeyStructureChange?.();
-      const wirePath = this._cb.wirePrefix ? `${this._cb.wirePrefix}${key}` : key;
-      const keyFrame: Frame = { frameType: FrameType.ServerKeyRegistration, keyId, dataType: newType, payload: wirePath };
-      const syncFrame: Frame = { frameType: FrameType.ServerSync, keyId: 0, dataType: DataType.Null, payload: null };
-      const valueFrame: Frame = { frameType: FrameType.ServerValue, keyId, dataType: newType, payload: value };
-      if (this._cb.onIncrementalKey) {
-        this._cb.onIncrementalKey(keyFrame, syncFrame, valueFrame);
-      } else {
-        this._cb.enqueue(keyFrame);
-        this._cb.enqueue(syncFrame);
-        this._cb.enqueue(valueFrame);
+    // Fast path: skip serialization entirely when value is identical
+    if (existing) {
+      if (existing.value === value) return false;
+
+      // Only serialize for size check when maxValueSize is configured
+      if (this._cb.maxValueSize != null) {
+        const serialized = serialize(newType, value);
+        if (serialized.length > this._cb.maxValueSize) {
+          throw new DanWSError("VALUE_TOO_LARGE", `Serialized value for "${key}" is ${serialized.length} bytes, exceeds maxValueSize (${this._cb.maxValueSize})`);
+        }
       }
+
+      if (existing.type !== newType) {
+        // Type changed — delete old key, register new key (incremental, no full resync)
+        this._cb.enqueue({ frameType: FrameType.ServerKeyDelete, keyId: existing.keyId, dataType: DataType.Null, payload: null });
+        this._freeKeyId(existing.keyId);
+        this._entries.delete(key);
+        this._cb.onKeyStructureChange?.();
+        // Re-register with new keyId + type (may reuse the freed keyId)
+        const newKeyId = this._allocateKeyId();
+        this._entries.set(key, { keyId: newKeyId, type: newType, value });
+        const wirePath = this._cb.wirePrefix ? `${this._cb.wirePrefix}${key}` : key;
+        this._cb.enqueue({ frameType: FrameType.ServerKeyRegistration, keyId: newKeyId, dataType: newType, payload: wirePath });
+        this._cb.enqueue({ frameType: FrameType.ServerSync, keyId: 0, dataType: DataType.Null, payload: null });
+        this._cb.enqueue({ frameType: FrameType.ServerValue, keyId: newKeyId, dataType: newType, payload: value });
+        return false;
+      }
+
+      existing.value = value;
+      this._cb.enqueue({
+        frameType: FrameType.ServerValue,
+        keyId: existing.keyId,
+        dataType: existing.type,
+        payload: value,
+      });
       return false;
     }
 
-    if (existing.type !== newType) {
-      // Type changed — delete old key, register new key (incremental, no full resync)
-      this._cb.enqueue({ frameType: FrameType.ServerKeyDelete, keyId: existing.keyId, dataType: DataType.Null, payload: null });
-      this._freeKeyId(existing.keyId);
-      this._entries.delete(key);
-      this._cb.onKeyStructureChange?.();
-      // Re-register with new keyId + type (may reuse the freed keyId)
-      const newKeyId = this._allocateKeyId();
-      this._entries.set(key, { keyId: newKeyId, type: newType, value });
-      const wirePath = this._cb.wirePrefix ? `${this._cb.wirePrefix}${key}` : key;
-      this._cb.enqueue({ frameType: FrameType.ServerKeyRegistration, keyId: newKeyId, dataType: newType, payload: wirePath });
-      this._cb.enqueue({ frameType: FrameType.ServerSync, keyId: 0, dataType: DataType.Null, payload: null });
-      this._cb.enqueue({ frameType: FrameType.ServerValue, keyId: newKeyId, dataType: newType, payload: value });
-      return false;
+    // New key — serialize for size check only when maxValueSize is configured
+    if (this._cb.maxValueSize != null) {
+      const serialized = serialize(newType, value);
+      if (serialized.length > this._cb.maxValueSize) {
+        throw new DanWSError("VALUE_TOO_LARGE", `Serialized value for "${key}" is ${serialized.length} bytes, exceeds maxValueSize (${this._cb.maxValueSize})`);
+      }
     }
 
-    if (existing.value === value) return false;
-
-    existing.value = value;
-    this._cb.enqueue({
-      frameType: FrameType.ServerValue,
-      keyId: existing.keyId,
-      dataType: existing.type,
-      payload: value,
-    });
+    const keyId = this._allocateKeyId();
+    this._entries.set(key, { keyId, type: newType, value });
+    this._cb.onKeyStructureChange?.();
+    const wirePath = this._cb.wirePrefix ? `${this._cb.wirePrefix}${key}` : key;
+    const keyFrame: Frame = { frameType: FrameType.ServerKeyRegistration, keyId, dataType: newType, payload: wirePath };
+    const syncFrame: Frame = { frameType: FrameType.ServerSync, keyId: 0, dataType: DataType.Null, payload: null };
+    const valueFrame: Frame = { frameType: FrameType.ServerValue, keyId, dataType: newType, payload: value };
+    if (this._cb.onIncrementalKey) {
+      this._cb.onIncrementalKey(keyFrame, syncFrame, valueFrame);
+    } else {
+      this._cb.enqueue(keyFrame);
+      this._cb.enqueue(syncFrame);
+      this._cb.enqueue(valueFrame);
+    }
     return false;
   }
 

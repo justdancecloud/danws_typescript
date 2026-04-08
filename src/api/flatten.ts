@@ -29,9 +29,10 @@ export function flattenValue(
   if (Array.isArray(value)) {
     if (seen.has(value)) throw new Error(`Circular reference detected at path "${prefix}"`);
     seen.add(value);
-    result.set(`${prefix}.length`, value.length);
+    const prefixDot = prefix + ".";
+    result.set(prefixDot + "length", value.length);
     for (let i = 0; i < value.length; i++) {
-      const childPath = `${prefix}.${i}`;
+      const childPath = prefixDot + i;
       const child = value[i];
       if (isPlainObject(child) || Array.isArray(child)) {
         for (const [k, v] of flattenValue(childPath, child, depth + 1, seen)) {
@@ -47,8 +48,9 @@ export function flattenValue(
   if (isPlainObject(value)) {
     if (seen.has(value)) throw new Error(`Circular reference detected at path "${prefix}"`);
     seen.add(value);
+    const prefixDot = prefix + ".";
     for (const [key, child] of Object.entries(value)) {
-      const childPath = `${prefix}.${key}`;
+      const childPath = prefixDot + key;
       if (isPlainObject(child) || Array.isArray(child)) {
         for (const [k, v] of flattenValue(childPath, child, depth + 1, seen)) {
           result.set(k, v);

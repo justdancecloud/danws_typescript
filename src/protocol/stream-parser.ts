@@ -19,7 +19,8 @@ export interface StreamParser {
 
 export function createStreamParser(maxBufferSize = 1_048_576): StreamParser {
   let state: ParserState = ParserState.Idle;
-  let buffer: number[] = [];
+  let _buffer: Uint8Array = new Uint8Array(4096);
+  let _bufferLen = 0;
 
   const frameCallbacks: Array<(frame: Frame) => void> = [];
   const heartbeatCallbacks: Array<() => void> = [];
@@ -35,6 +36,20 @@ export function createStreamParser(maxBufferSize = 1_048_576): StreamParser {
 
   function emitError(err: Error): void {
     for (const cb of errorCallbacks) cb(err);
+  }
+
+  function bufferPush(byte: number): void {
+    if (_bufferLen >= _buffer.length) {
+      const newCap = Math.min((_buffer.length * 1.5) | 0, maxBufferSize);
+      const newBuf = new Uint8Array(newCap);
+      newBuf.set(_buffer);
+      _buffer = newBuf;
+    }
+    _buffer[_bufferLen++] = byte;
+  }
+
+  function bufferReset(): void {
+    _bufferLen = 0;
   }
 
   function parseFrame(body: Uint8Array): Frame {
@@ -77,7 +92,7 @@ export function createStreamParser(maxBufferSize = 1_048_576): StreamParser {
         case ParserState.AfterDLE:
           if (byte === STX) {
             state = ParserState.InFrame;
-            buffer = [];
+            bufferReset();
           } else if (byte === ENQ) {
             emitHeartbeat();
             state = ParserState.Idle;
@@ -91,12 +106,12 @@ export function createStreamParser(maxBufferSize = 1_048_576): StreamParser {
           if (byte === DLE) {
             state = ParserState.InFrameAfterDLE;
           } else {
-            if (buffer.length >= maxBufferSize) {
+            if (_bufferLen >= maxBufferSize) {
               emitError(new DanWSError("FRAME_TOO_LARGE", `Frame exceeds ${maxBufferSize} bytes`));
-              buffer = [];
+              bufferReset();
               state = ParserState.Idle;
             } else {
-              buffer.push(byte);
+              bufferPush(byte);
             }
           }
           break;
@@ -105,21 +120,21 @@ export function createStreamParser(maxBufferSize = 1_048_576): StreamParser {
           if (byte === ETX) {
             // Frame complete
             try {
-              const body = new Uint8Array(buffer);
+              const body = _buffer.slice(0, _bufferLen);
               const frame = parseFrame(body);
               emitFrame(frame);
             } catch (err) {
               emitError(err instanceof Error ? err : new Error(String(err)));
             }
-            buffer = [];
+            bufferReset();
             state = ParserState.Idle;
           } else if (byte === DLE) {
             // Escaped DLE — decode immediately, store single 0x10
-            buffer.push(DLE);
+            bufferPush(DLE);
             state = ParserState.InFrame;
           } else {
             emitError(new DanWSError("INVALID_DLE_SEQUENCE", `Invalid DLE sequence in frame: 0x10 0x${byte.toString(16).padStart(2, "0")}`));
-            buffer = [];
+            bufferReset();
             state = ParserState.Idle;
           }
           break;
@@ -140,7 +155,7 @@ export function createStreamParser(maxBufferSize = 1_048_576): StreamParser {
     },
     reset() {
       state = ParserState.Idle;
-      buffer = [];
+      bufferReset();
     },
   };
 }
