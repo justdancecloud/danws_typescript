@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.2.1 (2026-04-08)
+
+**Protocol: ServerKeyDelete (0x22) + ClientKeyRequest (0x23)**
+- `clear(key)` now sends incremental ServerKeyDelete per key instead of full ServerReset + resync
+- Type change sends ServerKeyDelete(old) + KeyRegistration(new) instead of full resync
+- KeyId reuse: deleted keyIds are recycled for new registrations (prevents keyId exhaustion on long-running servers)
+- Unknown keyId: client sends ClientKeyRequest instead of ClientResyncReq (single-key recovery, not full state)
+- Server responds with KeyRegistration + ServerSync + Value for the requested key only
+
+**Impact:**
+- `clear("user")` with 5 sub-keys: 5 frames (was 200+ for full resync)
+- Type change: 4 frames (was full resync)
+- Unknown key recovery: 3 frames per key (was full state reset)
+
 ## 2.2.0 (2026-04-07) — Stable Release
 
 First stable release. All 4 modes fully tested and documented.

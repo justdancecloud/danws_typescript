@@ -17,6 +17,10 @@ export class StateStore {
     return new Map(this.values);
   }
 
+  delete(keyId: number): boolean {
+    return this.values.delete(keyId);
+  }
+
   clear(): void {
     this.values.clear();
   }

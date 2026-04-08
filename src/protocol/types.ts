@@ -40,6 +40,8 @@ export enum FrameType {
   AuthFail = 0x11,
   ArrayShiftLeft = 0x20,
   ArrayShiftRight = 0x21,
+  ServerKeyDelete = 0x22,
+  ClientKeyRequest = 0x23,
   ServerFlushEnd = 0xff,
 }
 
@@ -72,7 +74,9 @@ export function isSignalFrame(ft: FrameType): boolean {
     ft === FrameType.ClientReset ||
     ft === FrameType.ServerResyncReq ||
     ft === FrameType.AuthOk ||
-    ft === FrameType.ServerFlushEnd
+    ft === FrameType.ServerFlushEnd ||
+    ft === FrameType.ServerKeyDelete ||
+    ft === FrameType.ClientKeyRequest
   );
 }
 

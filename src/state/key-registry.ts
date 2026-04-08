@@ -83,6 +83,14 @@ export class KeyRegistry {
     return this.byPath.has(path);
   }
 
+  removeByKeyId(keyId: number): boolean {
+    const entry = this.byId.get(keyId);
+    if (!entry) return false;
+    this.byId.delete(keyId);
+    this.byPath.delete(entry.path);
+    return true;
+  }
+
   get size(): number {
     return this.byId.size;
   }

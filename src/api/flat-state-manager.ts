@@ -35,9 +35,18 @@ export class FlatStateManager {
   private _flattenedKeys = new Map<string, Set<string>>();
   private _previousArrays = new Map<string, unknown[]>();
   private _cb: FlatStateCallbacks;
+  private _freedKeyIds: number[] = [];
 
   constructor(cb: FlatStateCallbacks) {
     this._cb = cb;
+  }
+
+  private _allocateKeyId(): number {
+    return this._freedKeyIds.length > 0 ? this._freedKeyIds.pop()! : this._cb.allocateKeyId();
+  }
+
+  private _freeKeyId(keyId: number): void {
+    this._freedKeyIds.push(keyId);
   }
 
   set(key: string, value: unknown): void {
@@ -65,21 +74,26 @@ export class FlatStateManager {
       const flattened = flattenValue(key, value);
       const newKeys = new Set(flattened.keys());
       const oldKeys = this._flattenedKeys.get(key);
-      let needsResync = false;
+      let structureChanged = false;
       if (oldKeys) {
         for (const oldPath of oldKeys) {
           if (!newKeys.has(oldPath)) {
             if (isArrayIndexKey(key, oldPath)) continue;
-            this._entries.delete(oldPath);
-            needsResync = true;
+            const entry = this._entries.get(oldPath);
+            if (entry) {
+              this._cb.enqueue({ frameType: FrameType.ServerKeyDelete, keyId: entry.keyId, dataType: DataType.Null, payload: null });
+              this._freeKeyId(entry.keyId);
+              this._entries.delete(oldPath);
+              structureChanged = true;
+            }
           }
         }
       }
       this._flattenedKeys.set(key, newKeys);
       for (const [path, leaf] of flattened) {
-        if (this._setLeaf(path, leaf)) needsResync = true;
+        this._setLeaf(path, leaf);
       }
-      if (needsResync) this._cb.onResync();
+      if (structureChanged) this._cb.onKeyStructureChange?.();
       return;
     }
     if (this._setLeaf(key, value)) this._cb.onResync();
@@ -102,18 +116,33 @@ export class FlatStateManager {
     if (key !== undefined) {
       const flatKeys = this._flattenedKeys.get(key);
       if (flatKeys) {
-        for (const path of flatKeys) this._entries.delete(path);
+        for (const path of flatKeys) {
+          const entry = this._entries.get(path);
+          if (entry) {
+            this._cb.enqueue({ frameType: FrameType.ServerKeyDelete, keyId: entry.keyId, dataType: DataType.Null, payload: null });
+            this._freeKeyId(entry.keyId);
+            this._entries.delete(path);
+          }
+        }
         this._flattenedKeys.delete(key);
         this._previousArrays.delete(key);
         this._cb.onKeyStructureChange?.();
-        this._cb.onResync();
-      } else if (this._entries.delete(key)) {
-        this._previousArrays.delete(key);
-        this._cb.onKeyStructureChange?.();
-        this._cb.onResync();
+      } else {
+        const entry = this._entries.get(key);
+        if (entry) {
+          this._cb.enqueue({ frameType: FrameType.ServerKeyDelete, keyId: entry.keyId, dataType: DataType.Null, payload: null });
+          this._freeKeyId(entry.keyId);
+          this._entries.delete(key);
+          this._previousArrays.delete(key);
+          this._cb.onKeyStructureChange?.();
+        }
       }
     } else {
+      // clear() with no args — full reset, reclaim all keyIds
       if (this._entries.size > 0) {
+        for (const entry of this._entries.values()) {
+          this._freedKeyIds.push(entry.keyId);
+        }
         this._entries.clear();
         this._flattenedKeys.clear();
         this._previousArrays.clear();
@@ -164,7 +193,7 @@ export class FlatStateManager {
     const existing = this._entries.get(key);
 
     if (!existing) {
-      const keyId = this._cb.allocateKeyId();
+      const keyId = this._allocateKeyId();
       this._entries.set(key, { keyId, type: newType, value });
       this._cb.onKeyStructureChange?.();
       const wirePath = this._cb.wirePrefix ? `${this._cb.wirePrefix}${key}` : key;
@@ -182,10 +211,19 @@ export class FlatStateManager {
     }
 
     if (existing.type !== newType) {
-      existing.type = newType;
-      existing.value = value;
+      // Type changed — delete old key, register new key (incremental, no full resync)
+      this._cb.enqueue({ frameType: FrameType.ServerKeyDelete, keyId: existing.keyId, dataType: DataType.Null, payload: null });
+      this._freeKeyId(existing.keyId);
+      this._entries.delete(key);
       this._cb.onKeyStructureChange?.();
-      return true; // needs resync
+      // Re-register with new keyId + type (may reuse the freed keyId)
+      const newKeyId = this._allocateKeyId();
+      this._entries.set(key, { keyId: newKeyId, type: newType, value });
+      const wirePath = this._cb.wirePrefix ? `${this._cb.wirePrefix}${key}` : key;
+      this._cb.enqueue({ frameType: FrameType.ServerKeyRegistration, keyId: newKeyId, dataType: newType, payload: wirePath });
+      this._cb.enqueue({ frameType: FrameType.ServerSync, keyId: 0, dataType: DataType.Null, payload: null });
+      this._cb.enqueue({ frameType: FrameType.ServerValue, keyId: newKeyId, dataType: newType, payload: value });
+      return false;
     }
 
     if (existing.value === value) return false;

@@ -216,6 +216,11 @@ export class DanWebSocketSession {
         }
         break;
 
+      case FrameType.ClientKeyRequest:
+        // Client requests info for a specific keyId it doesn't know about
+        this._handleKeyRequest(frame.keyId);
+        break;
+
       case FrameType.Error:
         this._emitError(new DanWSError("REMOTE_ERROR", String(frame.payload)));
         break;
@@ -329,6 +334,52 @@ export class DanWebSocketSession {
     for (const handle of this._topicHandles.values()) {
       for (const f of handle.payload._buildValueFrames()) {
         this._sessionEnqueue(f);
+      }
+    }
+  }
+
+  private _handleKeyRequest(keyId: number): void {
+    if (!this._enqueueFrame) return;
+
+    // Search in TX providers (broadcast/principal mode)
+    if (this._txKeyFrameProvider && this._txValueFrameProvider) {
+      const keyFrames = this._txKeyFrameProvider();
+      const keyFrame = keyFrames.find(f => f.keyId === keyId && f.frameType === FrameType.ServerKeyRegistration);
+      if (keyFrame) {
+        this._enqueueFrame(keyFrame);
+        this._enqueueFrame({ frameType: FrameType.ServerSync, keyId: 0, dataType: DataType.Null, payload: null });
+        const valueFrames = this._txValueFrameProvider();
+        const valueFrame = valueFrames.find(f => f.keyId === keyId);
+        if (valueFrame) this._enqueueFrame(valueFrame);
+        return;
+      }
+    }
+
+    // Search in session-level flat state (topic mode)
+    if (this._flatState) {
+      for (const f of this._flatState.buildKeyFrames()) {
+        if (f.keyId === keyId) {
+          this._enqueueFrame(f);
+          this._enqueueFrame({ frameType: FrameType.ServerSync, keyId: 0, dataType: DataType.Null, payload: null });
+          for (const vf of this._flatState.buildValueFrames()) {
+            if (vf.keyId === keyId) { this._enqueueFrame(vf); break; }
+          }
+          return;
+        }
+      }
+    }
+
+    // Search in topic payloads
+    for (const handle of this._topicHandles.values()) {
+      for (const f of handle.payload._buildKeyFrames()) {
+        if (f.keyId === keyId) {
+          this._enqueueFrame(f);
+          this._enqueueFrame({ frameType: FrameType.ServerSync, keyId: 0, dataType: DataType.Null, payload: null });
+          for (const vf of handle.payload._buildValueFrames()) {
+            if (vf.keyId === keyId) { this._enqueueFrame(vf); break; }
+          }
+          return;
+        }
       }
     }
   }

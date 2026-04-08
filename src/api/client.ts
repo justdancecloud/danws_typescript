@@ -57,6 +57,7 @@ export class DanWebSocketClient {
   // Server→Client key registry and state
   private _registry = new KeyRegistry();
   private _store = new StateStore();
+  private _pendingValues = new Map<number, Frame>();
   private _inboundRecovery = new RecoveryController();
 
   // Topic state (client→server)
@@ -297,6 +298,25 @@ export class DanWebSocketClient {
         }
         const keyPath = frame.payload as string;
         this._registry.registerOne(frame.keyId, keyPath, frame.dataType);
+        // Apply any pending value that arrived before this key was registered
+        const pending = this._pendingValues.get(frame.keyId);
+        if (pending) {
+          this._pendingValues.delete(frame.keyId);
+          this._store.set(frame.keyId, pending.payload);
+          const topicMatch = keyPath.match(/^t\.(\d+)\.(.+)$/);
+          if (topicMatch) {
+            const idx = parseInt(topicMatch[1]);
+            const topicName = this._indexToTopic.get(idx);
+            if (topicName) {
+              const handle = this._topicClientHandles.get(topicName);
+              if (handle) handle._notify(topicMatch[2], pending.payload);
+            }
+          } else {
+            for (const cb of this._onReceive) {
+              try { cb(keyPath, pending.payload); } catch (e) { this._log("onReceive callback error", e as Error); }
+            }
+          }
+        }
         break;
       }
 
@@ -332,9 +352,13 @@ export class DanWebSocketClient {
 
       case FrameType.ServerValue: {
         if (!this._registry.hasKeyId(frame.keyId)) {
-          const resyncFrame = this._inboundRecovery.triggerResync(FrameType.ClientResyncReq);
-          if (resyncFrame) this._bulkQueue.enqueue(resyncFrame);
-          this._emitError(new DanWSError("UNKNOWN_KEY_ID", `Unknown server key ID: ${frame.keyId}`));
+          // Request only this specific key instead of full resync
+          this._bulkQueue.enqueue({
+            frameType: FrameType.ClientKeyRequest,
+            keyId: frame.keyId, dataType: DataType.Null, payload: null,
+          });
+          // Buffer the value — it will be applied after key info arrives
+          this._pendingValues.set(frame.keyId, frame);
           break;
         }
         this._store.set(frame.keyId, frame.payload);
@@ -501,9 +525,33 @@ export class DanWebSocketClient {
         // Server acknowledged our topic sync — no action needed
         break;
 
+      case FrameType.ServerKeyDelete: {
+        // Incremental key deletion — remove single key without full resync
+        const deletedEntry = this._registry.getByKeyId(frame.keyId);
+        this._registry.removeByKeyId(frame.keyId);
+        this._store.delete(frame.keyId);
+        if (deletedEntry) {
+          const topicMatch = deletedEntry.path.match(/^t\.(\d+)\.(.+)$/);
+          if (topicMatch) {
+            const idx = parseInt(topicMatch[1]);
+            const topicName = this._indexToTopic.get(idx);
+            if (topicName) {
+              const handle = this._topicClientHandles.get(topicName);
+              if (handle) handle._notify(topicMatch[2], undefined);
+            }
+          } else {
+            for (const cb of this._onReceive) {
+              try { cb(deletedEntry.path, undefined); } catch (e) { this._log("onReceive callback error", e as Error); }
+            }
+          }
+        }
+        break;
+      }
+
       case FrameType.ServerReset:
         this._registry.clear();
         this._store.clear();
+        this._pendingValues.clear();
         this._state = "synchronizing";
         break;
 
