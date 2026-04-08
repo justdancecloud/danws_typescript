@@ -38,7 +38,13 @@ function generateUUIDv7(): string {
   bytes[3] = Number((ms >> 16n) & 0xffn);
   bytes[4] = Number((ms >> 8n) & 0xffn);
   bytes[5] = Number(ms & 0xffn);
-  const random = crypto.getRandomValues(new Uint8Array(10));
+  const random = new Uint8Array(10);
+  if (globalThis.crypto?.getRandomValues) {
+    globalThis.crypto.getRandomValues(random);
+  } else {
+    // Fallback for environments without Web Crypto API
+    for (let i = 0; i < random.length; i++) random[i] = Math.floor(Math.random() * 256);
+  }
   bytes.set(random, 6);
   bytes[6] = (bytes[6] & 0x0f) | 0x70;
   bytes[8] = (bytes[8] & 0x3f) | 0x80;
@@ -683,6 +689,10 @@ export class DanWebSocketClient {
   }
 
   private _emitError(err: DanWSError): void {
+    if (this._onError.length === 0) {
+      // No error listeners — throw to avoid silent failure (like Node.js EventEmitter)
+      throw err;
+    }
     this._emit(this._onError, err);
   }
 }

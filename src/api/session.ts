@@ -403,6 +403,9 @@ export class DanWebSocketSession {
   }
 
   private _emitError(err: DanWSError): void {
+    if (this._onError.length === 0) {
+      throw err;
+    }
     this._emit(this._onError, err);
   }
 }

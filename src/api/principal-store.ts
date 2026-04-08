@@ -163,12 +163,12 @@ export class PrincipalManager {
     this._sessionCounts.set(principal, (this._sessionCounts.get(principal) ?? 0) + 1);
   }
 
-  /** @internal */
+  /** @internal — Returns true when session count reaches 0. Caller decides when to evict. */
   _removeSession(principal: string): boolean {
     const count = (this._sessionCounts.get(principal) ?? 1) - 1;
     if (count <= 0) {
       this._sessionCounts.delete(principal);
-      return true;
+      return true; // No active sessions — caller may schedule eviction after TTL
     }
     this._sessionCounts.set(principal, count);
     return false;

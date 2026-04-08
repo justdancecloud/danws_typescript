@@ -46,7 +46,10 @@ export class FlatStateManager {
   }
 
   private _freeKeyId(keyId: number): void {
-    this._freedKeyIds.push(keyId);
+    // Cap pool size to prevent unbounded growth (pool never needs to be larger than active key count)
+    if (this._freedKeyIds.length < 10_000) {
+      this._freedKeyIds.push(keyId);
+    }
   }
 
   set(key: string, value: unknown): void {

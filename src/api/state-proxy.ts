@@ -8,17 +8,24 @@ export function createStateProxy(
   keysFn: () => string[],
   prefix = "",
 ): Record<string, any> {
-  // Build prefix index for O(1) "has children" checks
-  // Rebuilt on every access to avoid stale cache when keys change between accesses
+  // Prefix index with dirty-flag caching.
+  // Rebuilt only when key count changes (cheap staleness check).
+  let _cachedPrefixSet: Set<string> | null = null;
+  let _cachedKeyCount = -1;
+
   function prefixSet(): Set<string> {
+    const keys = keysFn();
+    if (_cachedPrefixSet && keys.length === _cachedKeyCount) return _cachedPrefixSet;
     const set = new Set<string>();
-    for (const k of keysFn()) {
+    for (const k of keys) {
       let dot = k.indexOf(".");
       while (dot !== -1) {
         set.add(k.slice(0, dot + 1)); // "user." , "user.scores." etc
         dot = k.indexOf(".", dot + 1);
       }
     }
+    _cachedPrefixSet = set;
+    _cachedKeyCount = keys.length;
     return set;
   }
 

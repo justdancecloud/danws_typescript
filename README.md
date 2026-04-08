@@ -487,6 +487,14 @@ client.connect();
 
 ---
 
+## Architecture: CQRS-Friendly Real-Time State
+
+dan-websocket naturally enables a **CQRS (Command Query Responsibility Segregation)** pattern. Writes (commands) flow through your existing REST/gRPC API, while reads (queries) are delivered as real-time state via WebSocket. The server calls `set()` whenever state changes -- whether triggered by an API request, a database event, or a background job -- and every connected client receives the update instantly.
+
+This means your clients never poll for data. They submit actions through your API, and the results appear automatically through the WebSocket channel. Your API handles validation and business logic; dan-websocket handles the read side by pushing the resulting state to all relevant clients with field-level efficiency.
+
+---
+
 ## How It Works
 
 ### Auto-Flatten
