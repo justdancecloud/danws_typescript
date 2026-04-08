@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.4.1] - 2026-04-08
+### Changed
+- Version sync with Java release (thread safety is Java-only, no TS changes)
+
 ## [2.4.0] - 2026-04-08
 ### Added
 - VarInteger (0x0D): Zigzag + VarInt encoding for integers (1-9 bytes)
