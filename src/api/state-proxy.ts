@@ -12,6 +12,8 @@ export function createStateProxy(
   // Rebuilt when the keys array reference changes (covers add, delete, and swap).
   let _cachedPrefixSet: Set<string> | null = null;
   let _lastKeysRef: string[] | null = null;
+  let _cachedOwnKeys: string[] | null = null;
+  let _ownKeysRef: string[] | null = null;
 
   function prefixSet(): Set<string> {
     const keys = keysFn();
@@ -81,15 +83,19 @@ export function createStateProxy(
     },
 
     ownKeys(_target) {
+      const currentKeys = keysFn();
+      if (_cachedOwnKeys && currentKeys === _ownKeysRef) return _cachedOwnKeys;
       const pfx = prefix ? `${prefix}.` : "";
       const keys = new Set<string>();
-      for (const k of keysFn()) {
+      for (const k of currentKeys) {
         if (pfx && !k.startsWith(pfx)) continue;
         const rest = pfx ? k.slice(pfx.length) : k;
         const dot = rest.indexOf(".");
         keys.add(dot === -1 ? rest : rest.slice(0, dot));
       }
-      return Array.from(keys);
+      _cachedOwnKeys = Array.from(keys);
+      _ownKeysRef = currentKeys;
+      return _cachedOwnKeys;
     },
 
     getOwnPropertyDescriptor(_target, prop) {

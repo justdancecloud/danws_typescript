@@ -33,11 +33,11 @@ describe("HeartbeatManager", () => {
     hb.onTimeout(onTimeout);
     hb.start();
 
-    // Timeout check runs every 1s. At 16s, Date.now()-lastReceived > 15000
+    // Timeout check runs every 5s. At 15s, Date.now()-lastReceived === 15000 (not > 15000)
     vi.advanceTimersByTime(15000);
     expect(onTimeout).not.toHaveBeenCalled();
 
-    vi.advanceTimersByTime(1000); // 16s — timeout fires
+    vi.advanceTimersByTime(5000); // 20s — next 5s tick, timeout fires
     expect(onTimeout).toHaveBeenCalledOnce();
   });
 

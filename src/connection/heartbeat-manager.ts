@@ -29,7 +29,7 @@ export class HeartbeatManager {
       }
     }, SEND_INTERVAL);
 
-    // Check for timeout every second
+    // Check for timeout every 5 seconds (threshold is 15s, so detection within 15-20s)
     this.timeoutTimer = setInterval(() => {
       if (Date.now() - this.lastReceived > TIMEOUT_THRESHOLD) {
         this.stop();
@@ -37,7 +37,7 @@ export class HeartbeatManager {
           this._onTimeout();
         }
       }
-    }, 1000);
+    }, 5000);
   }
 
   /**

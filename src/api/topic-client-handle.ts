@@ -15,6 +15,8 @@ export class TopicClientHandle {
   private _onReceive: Array<(key: string, value: unknown) => void> = [];
   private _onUpdate: Array<(payload: TopicClientPayloadView) => void> = [];
   private _log: ((msg: string, err?: Error) => void) | null;
+  private _cachedKeys: string[] | null = null;
+  private _lastPathsRef: string[] | null = null;
 
   constructor(name: string, index: number, registry: KeyRegistry, storeGet: (keyId: number) => unknown, log?: (msg: string, err?: Error) => void) {
     this.name = name;
@@ -40,13 +42,17 @@ export class TopicClientHandle {
   }
 
   get keys(): string[] {
+    const paths = this._registry.paths;
+    if (this._cachedKeys && paths === this._lastPathsRef) return this._cachedKeys;
     const prefix = `t.${this._index}.`;
     const result: string[] = [];
-    for (const path of this._registry.paths) {
+    for (const path of paths) {
       if (path.startsWith(prefix)) {
         result.push(path.slice(prefix.length));
       }
     }
+    this._cachedKeys = result;
+    this._lastPathsRef = paths;
     return result;
   }
 
@@ -90,5 +96,5 @@ export class TopicClientHandle {
   get _idx(): number { return this._index; }
 
   /** @internal — update wire index */
-  _setIndex(index: number): void { this._index = index; }
+  _setIndex(index: number): void { this._index = index; this._cachedKeys = null; this._lastPathsRef = null; }
 }

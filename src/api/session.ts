@@ -28,6 +28,10 @@ export class DanWebSocketSession {
   private _txKeyFrameProvider: (() => Frame[]) | null = null;
   private _txValueFrameProvider: (() => Frame[]) | null = null;
 
+  // O(1) index for ClientKeyRequest lookups on TX provider frames
+  private _txKeyFrameIndex: Map<number, Frame> | null = null;
+  private _txValueFrameIndex: Map<number, Frame> | null = null;
+
   // Sync tracking
   private _serverSyncSent = false;
   private _clientReadyReceived = false;
@@ -144,6 +148,8 @@ export class DanWebSocketSession {
   _setTxProviders(keyFrames: () => Frame[], valueFrames: () => Frame[]): void {
     this._txKeyFrameProvider = keyFrames;
     this._txValueFrameProvider = valueFrames;
+    this._txKeyFrameIndex = null;
+    this._txValueFrameIndex = null;
   }
 
   /** @internal — bind session-level TX (topic modes) */
@@ -207,6 +213,8 @@ export class DanWebSocketSession {
 
       case FrameType.ClientResyncReq:
         if (this._txKeyFrameProvider && this._enqueueFrame) {
+          this._txKeyFrameIndex = null;
+          this._txValueFrameIndex = null;
           this._enqueueFrame({
             frameType: FrameType.ServerReset,
             keyId: 0, dataType: DataType.Null, payload: null,
@@ -297,17 +305,22 @@ export class DanWebSocketSession {
   private _triggerSessionResync(): void {
     if (!this._sessionEnqueue) return;
 
+    // Invalidate TX key frame index on resync
+    this._txKeyFrameIndex = null;
+    this._txValueFrameIndex = null;
+
     // ServerReset
     this._sessionEnqueue({
       frameType: FrameType.ServerReset,
       keyId: 0, dataType: DataType.Null, payload: null,
     });
 
-    // Key registrations: flat session entries
+    // Build flat state frames in a single pass (key + value together)
+    let flatValueFrames: Frame[] | undefined;
     if (this._flatState) {
-      for (const f of this._flatState.buildKeyFrames()) {
-        this._sessionEnqueue(f);
-      }
+      const { keyFrames, valueFrames } = this._flatState.buildAllFrames();
+      for (const f of keyFrames) this._sessionEnqueue(f);
+      flatValueFrames = valueFrames;
     }
 
     // Key registrations: topic payload entries
@@ -323,11 +336,9 @@ export class DanWebSocketSession {
       keyId: 0, dataType: DataType.Null, payload: null,
     });
 
-    // Values: flat session entries
-    if (this._flatState) {
-      for (const f of this._flatState.buildValueFrames()) {
-        this._sessionEnqueue(f);
-      }
+    // Values: flat session entries (from single-pass result)
+    if (flatValueFrames) {
+      for (const f of flatValueFrames) this._sessionEnqueue(f);
     }
 
     // Values: topic payload entries
@@ -341,40 +352,64 @@ export class DanWebSocketSession {
   private _handleKeyRequest(keyId: number): void {
     if (!this._enqueueFrame) return;
 
-    // Search in TX providers (broadcast/principal mode)
+    const syncFrame: Frame = { frameType: FrameType.ServerSync, keyId: 0, dataType: DataType.Null, payload: null };
+
+    // Search in TX providers (broadcast/principal mode) — O(1) via cached index
     if (this._txKeyFrameProvider && this._txValueFrameProvider) {
-      const keyFrames = this._txKeyFrameProvider();
-      const keyFrame = keyFrames.find(f => f.keyId === keyId && f.frameType === FrameType.ServerKeyRegistration);
+      if (!this._txKeyFrameIndex) {
+        this._txKeyFrameIndex = new Map<number, Frame>();
+        for (const f of this._txKeyFrameProvider()) {
+          if (f.frameType === FrameType.ServerKeyRegistration) {
+            this._txKeyFrameIndex.set(f.keyId, f);
+          }
+        }
+      }
+      const keyFrame = this._txKeyFrameIndex.get(keyId);
       if (keyFrame) {
         this._enqueueFrame(keyFrame);
-        this._enqueueFrame({ frameType: FrameType.ServerSync, keyId: 0, dataType: DataType.Null, payload: null });
-        const valueFrames = this._txValueFrameProvider();
-        const valueFrame = valueFrames.find(f => f.keyId === keyId);
+        this._enqueueFrame(syncFrame);
+        if (!this._txValueFrameIndex) {
+          this._txValueFrameIndex = new Map<number, Frame>();
+          for (const f of this._txValueFrameProvider()) {
+            this._txValueFrameIndex.set(f.keyId, f);
+          }
+        }
+        const valueFrame = this._txValueFrameIndex.get(keyId);
         if (valueFrame) this._enqueueFrame(valueFrame);
         return;
       }
     }
 
-    // Search in session-level flat state (topic mode)
+    // Search in session-level flat state (topic mode) — O(1) via reverse index
     if (this._flatState) {
-      for (const f of this._flatState.buildKeyFrames()) {
-        if (f.keyId === keyId) {
-          this._enqueueFrame(f);
-          this._enqueueFrame({ frameType: FrameType.ServerSync, keyId: 0, dataType: DataType.Null, payload: null });
-          for (const vf of this._flatState.buildValueFrames()) {
-            if (vf.keyId === keyId) { this._enqueueFrame(vf); break; }
-          }
-          return;
+      const found = this._flatState.getByKeyId(keyId);
+      if (found) {
+        const wirePath = found.key; // FlatStateManager stores path as key
+        this._enqueueFrame({
+          frameType: FrameType.ServerKeyRegistration,
+          keyId: found.entry.keyId,
+          dataType: found.entry.type,
+          payload: wirePath,
+        });
+        this._enqueueFrame(syncFrame);
+        if (found.entry.value !== undefined) {
+          this._enqueueFrame({
+            frameType: FrameType.ServerValue,
+            keyId: found.entry.keyId,
+            dataType: found.entry.type,
+            payload: found.entry.value,
+          });
         }
+        return;
       }
     }
 
-    // Search in topic payloads
+    // Search in topic payloads (linear scan — TopicPayload API is not modifiable here)
     for (const handle of this._topicHandles.values()) {
       for (const f of handle.payload._buildKeyFrames()) {
         if (f.keyId === keyId) {
           this._enqueueFrame(f);
-          this._enqueueFrame({ frameType: FrameType.ServerSync, keyId: 0, dataType: DataType.Null, payload: null });
+          this._enqueueFrame(syncFrame);
           for (const vf of handle.payload._buildValueFrames()) {
             if (vf.keyId === keyId) { this._enqueueFrame(vf); break; }
           }

@@ -16,7 +16,11 @@ const MAX_KEY_PATH_BYTES = 200;
 
 const textEncoder = new TextEncoder();
 
+const _validatedPaths = new Set<string>();
+const MAX_VALIDATED_CACHE = 10_000;
+
 export function validateKeyPath(path: string): void {
+  if (_validatedPaths.has(path)) return;
   if (path.length === 0) {
     throw new DanWSError("INVALID_KEY_PATH", "Key path must not be empty");
   }
@@ -26,6 +30,10 @@ export function validateKeyPath(path: string): void {
   if (textEncoder.encode(path).length > MAX_KEY_PATH_BYTES) {
     throw new DanWSError("INVALID_KEY_PATH", `Key path exceeds 200 bytes: "${path}"`);
   }
+  if (_validatedPaths.size >= MAX_VALIDATED_CACHE) {
+    _validatedPaths.clear();
+  }
+  _validatedPaths.add(path);
 }
 
 export class KeyRegistry {

@@ -16,9 +16,13 @@ export function detectArrayShiftBoth(oldArr: unknown[], newArr: unknown[]): Shif
   const oldLen = oldArr.length;
   const newLen = newArr.length;
 
+  // Cap shift search to avoid O(n^2) on large arrays
+  const MAX_SHIFT = 50;
+
   // 1. Left shift: find new[0] in oldArr → gives shift amount k
   const newFirst = newArr[0];
-  for (let k = 1; k < oldLen; k++) {
+  const leftLimit = Math.min(oldLen, MAX_SHIFT + 1);
+  for (let k = 1; k < leftLimit; k++) {
     if (oldArr[k] !== newFirst) continue;
     const matchLen = Math.min(oldLen - k, newLen);
     if (matchLen <= 0) continue;
@@ -31,7 +35,8 @@ export function detectArrayShiftBoth(oldArr: unknown[], newArr: unknown[]): Shif
 
   // 2. Right shift: find old[0] in newArr → gives shift amount k
   const oldFirst = oldArr[0];
-  for (let k = 1; k < newLen; k++) {
+  const rightLimit = Math.min(newLen, MAX_SHIFT + 1);
+  for (let k = 1; k < rightLimit; k++) {
     if (newArr[k] !== oldFirst) continue;
     const matchLen = Math.min(oldLen, newLen - k);
     if (matchLen <= 0) continue;

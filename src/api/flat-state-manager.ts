@@ -32,6 +32,7 @@ export interface FlatStateCallbacks {
  */
 export class FlatStateManager {
   private _entries = new Map<string, FlatEntry>();
+  private _byKeyId = new Map<number, { key: string; entry: FlatEntry }>();
   private _flattenedKeys = new Map<string, Set<string>>();
   private _previousArrays = new Map<string, unknown[]>();
   private _cb: FlatStateCallbacks;
@@ -86,6 +87,7 @@ export class FlatStateManager {
             if (entry) {
               this._cb.enqueue({ frameType: FrameType.ServerKeyDelete, keyId: entry.keyId, dataType: DataType.Null, payload: null });
               this._freeKeyId(entry.keyId);
+              this._byKeyId.delete(entry.keyId);
               this._entries.delete(oldPath);
               structureChanged = true;
             }
@@ -124,6 +126,7 @@ export class FlatStateManager {
           if (entry) {
             this._cb.enqueue({ frameType: FrameType.ServerKeyDelete, keyId: entry.keyId, dataType: DataType.Null, payload: null });
             this._freeKeyId(entry.keyId);
+            this._byKeyId.delete(entry.keyId);
             this._entries.delete(path);
           }
         }
@@ -135,6 +138,7 @@ export class FlatStateManager {
         if (entry) {
           this._cb.enqueue({ frameType: FrameType.ServerKeyDelete, keyId: entry.keyId, dataType: DataType.Null, payload: null });
           this._freeKeyId(entry.keyId);
+          this._byKeyId.delete(entry.keyId);
           this._entries.delete(key);
           this._previousArrays.delete(key);
           this._cb.onKeyStructureChange?.();
@@ -147,6 +151,7 @@ export class FlatStateManager {
           this._freedKeyIds.push(entry.keyId);
         }
         this._entries.clear();
+        this._byKeyId.clear();
         this._flattenedKeys.clear();
         this._previousArrays.clear();
         this._cb.onKeyStructureChange?.();
@@ -184,6 +189,35 @@ export class FlatStateManager {
     return frames;
   }
 
+  /** Build key frames and value frames in a single pass over _entries. */
+  buildAllFrames(): { keyFrames: Frame[]; valueFrames: Frame[] } {
+    const keyFrames: Frame[] = [];
+    const valueFrames: Frame[] = [];
+    for (const [key, entry] of this._entries) {
+      const wirePath = this._cb.wirePrefix ? `${this._cb.wirePrefix}${key}` : key;
+      keyFrames.push({
+        frameType: FrameType.ServerKeyRegistration,
+        keyId: entry.keyId,
+        dataType: entry.type,
+        payload: wirePath,
+      });
+      if (entry.value !== undefined) {
+        valueFrames.push({
+          frameType: FrameType.ServerValue,
+          keyId: entry.keyId,
+          dataType: entry.type,
+          payload: entry.value,
+        });
+      }
+    }
+    return { keyFrames, valueFrames };
+  }
+
+  /** O(1) lookup of an entry by its keyId. */
+  getByKeyId(keyId: number): { key: string; entry: { keyId: number; type: DataType; value: unknown } } | undefined {
+    return this._byKeyId.get(keyId);
+  }
+
   /** Returns true if resync is needed (type change on existing key). */
   private _setLeaf(key: string, value: unknown): boolean {
     validateKeyPath(key);
@@ -207,11 +241,14 @@ export class FlatStateManager {
         // Type changed — delete old key, register new key (incremental, no full resync)
         this._cb.enqueue({ frameType: FrameType.ServerKeyDelete, keyId: existing.keyId, dataType: DataType.Null, payload: null });
         this._freeKeyId(existing.keyId);
+        this._byKeyId.delete(existing.keyId);
         this._entries.delete(key);
         this._cb.onKeyStructureChange?.();
         // Re-register with new keyId + type (may reuse the freed keyId)
         const newKeyId = this._allocateKeyId();
-        this._entries.set(key, { keyId: newKeyId, type: newType, value });
+        const newEntry = { keyId: newKeyId, type: newType, value };
+        this._entries.set(key, newEntry);
+        this._byKeyId.set(newKeyId, { key, entry: newEntry });
         const wirePath = this._cb.wirePrefix ? `${this._cb.wirePrefix}${key}` : key;
         this._cb.enqueue({ frameType: FrameType.ServerKeyRegistration, keyId: newKeyId, dataType: newType, payload: wirePath });
         this._cb.enqueue({ frameType: FrameType.ServerSync, keyId: 0, dataType: DataType.Null, payload: null });
@@ -238,7 +275,9 @@ export class FlatStateManager {
     }
 
     const keyId = this._allocateKeyId();
-    this._entries.set(key, { keyId, type: newType, value });
+    const newEntry = { keyId, type: newType, value };
+    this._entries.set(key, newEntry);
+    this._byKeyId.set(keyId, { key, entry: newEntry });
     this._cb.onKeyStructureChange?.();
     const wirePath = this._cb.wirePrefix ? `${this._cb.wirePrefix}${key}` : key;
     const keyFrame: Frame = { frameType: FrameType.ServerKeyRegistration, keyId, dataType: newType, payload: wirePath };

@@ -321,6 +321,9 @@ export class DanWebSocketServer {
     });
 
     ptx._onResync(() => {
+      // Build key frames once before iterating sessions (avoids redundant rebuilds
+      // if the cache was just invalidated by the resync trigger)
+      const keyFrames = ptx._buildKeyFrames();
       for (const internal of this._getSessionsForPrincipal(ptx.name)) {
         if (internal.session.connected &&
             internal.ws && internal.ws.readyState === WS.OPEN) {
@@ -328,7 +331,7 @@ export class DanWebSocketServer {
             frameType: FrameType.ServerReset,
             keyId: 0, dataType: DataType.Null, payload: null,
           });
-          for (const f of ptx._buildKeyFrames()) internal.bulkQueue.enqueue(f);
+          for (const f of keyFrames) internal.bulkQueue.enqueue(f);
         }
       }
     });
