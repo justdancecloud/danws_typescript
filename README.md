@@ -66,14 +66,14 @@ import { DanWebSocketServer } from "dan-websocket/server";
 
 const server = new DanWebSocketServer({ port: 8080, mode: "broadcast" });
 
-// 객체를 그대로 set — 자동으로 바이너리 리프 키로 변환됩니다
+// set any object — automatically converted to binary leaf keys
 server.set("price", { btc: 67000, eth: 3200 });
 
-// 1초마다 업데이트 — 변경된 필드만 전송됩니다
+// update every second — only changed fields are sent
 setInterval(() => {
   server.set("price", {
     btc: 67000 + Math.random() * 100,
-    eth: 3200,  // 변경 없음 → 전송 안 됨
+    eth: 3200,  // unchanged → not sent
   });
 }, 1000);
 ```
@@ -143,19 +143,19 @@ import { DanWebSocketServer } from "dan-websocket/server";
 
 const server = new DanWebSocketServer({ port: 8080, mode: "broadcast" });
 
-// 어떤 객체든 set — 자동으로 바이너리 리프 키로 변환
+// set any object — automatically converted to binary leaf keys
 server.set("market", {
   btc: { price: 67000, volume: 1200 },
   eth: { price: 3200, volume: 800 },
 });
 
-// 주기적 업데이트 — 변경된 필드만 전송
+// periodic update — only changed fields are sent
 setInterval(() => {
   server.set("market", {
     btc: { price: 67000 + Math.random() * 100, volume: 1200 },
     eth: { price: 3200 + Math.random() * 10, volume: 800 },
   });
-  // btc.price만 바뀌면 → 1 프레임. eth는 그대로 → 0 바이트.
+  // if only btc.price changed → 1 frame. eth unchanged → 0 bytes.
 }, 1000);
 ```
 
@@ -166,18 +166,18 @@ import { DanWebSocketClient } from "dan-websocket";
 
 const client = new DanWebSocketClient("ws://localhost:8080");
 
-// onUpdate는 서버 flush 배치당 1번만 호출 (~100ms) — 렌더링에 안전
+// onUpdate fires once per server flush batch (~100ms) — safe for rendering
 client.onUpdate((state) => {
   console.log(state.market.btc.price);   // 67042.3
   console.log(state.market.eth.volume);  // 800
 });
 
-// 개별 필드 변경도 감지 가능
+// can also listen for individual field changes
 client.onReceive((key, value) => {
   // key = "market.btc.price", value = 67042.3
 });
 
-// flat 키로도 접근 가능
+// can also access by flat key
 // client.get("market.btc.price") → 67042.3
 
 client.connect();
@@ -210,7 +210,7 @@ import { DanWebSocketServer } from "dan-websocket/server";
 const server = new DanWebSocketServer({
   port: 8080,
   mode: "principal",
-  principalEvictionTtl: 300_000, // 5분 후 접속 없으면 데이터 자동 정리
+  principalEvictionTtl: 300_000, // auto-evict data after 5 min with no connections
 });
 
 server.enableAuthorization(true);
@@ -224,18 +224,18 @@ server.onAuthorize(async (uuid, token) => {
   }
 });
 
-// 유저별 데이터 설정 — alice의 모든 기기에 전송
+// set per-user data — sent to all of alice's devices
 server.principal("alice").set("profile", {
   name: "Alice",
   score: 100,
   inventory: ["sword", "shield", "potion"],
 });
 
-// alice가 점수를 얻으면 — Float64 8바이트만 전송
+// when alice scores a point — only Float64 8 bytes sent
 server.principal("alice").set("profile", {
   name: "Alice",
-  score: 101,         // 이것만 전송
-  inventory: ["sword", "shield", "potion"],  // 변경 없음 → 전송 안 됨
+  score: 101,         // only this is sent
+  inventory: ["sword", "shield", "potion"],  // unchanged → not sent
 });
 ```
 
@@ -250,12 +250,12 @@ client.onConnect(() => {
   client.authorize("eyJhbGciOiJIUzI1NiJ9...");
 });
 
-// onReady: 인증 성공 + 초기 데이터 동기화 완료 후 호출
+// onReady: fires after auth success + initial data sync complete
 client.onReady(() => {
   console.log("Authenticated and synced!");
 });
 
-// 내 principal 데이터만 수신
+// receives only my principal's data
 client.onUpdate((state) => {
   console.log(state.profile.name);       // "Alice"
   console.log(state.profile.score);      // 101
@@ -299,24 +299,24 @@ server.topic.onSubscribe((session, topic) => {
 
   if (topic.name === "stock.chart") {
     topic.setCallback(async (event, t) => {
-      // event: SubscribeEvent(첫 구독), ChangedParamsEvent(파라미터 변경), DelayedTaskEvent(주기적)
+      // event: SubscribeEvent (first subscribe), ChangedParamsEvent (params changed), DelayedTaskEvent (periodic)
       if (event === EventType.ChangedParamsEvent) {
-        t.payload.clear(); // 파라미터 변경 시 이전 데이터 삭제
+        t.payload.clear(); // clear previous data on param change
       }
 
       const symbol = t.params.symbol as string;
       const candles = await fetchCandles(symbol);
-      t.payload.set("candles", candles);       // 배열 → 자동 flat, shift 감지
+      t.payload.set("candles", candles);       // array → auto-flatten, shift detection
       t.payload.set("meta", { symbol, count: candles.length });
     });
 
-    topic.setDelayedTask(5000); // 5초마다 갱신
+    topic.setDelayedTask(5000); // refresh every 5 seconds
   }
 });
 
 server.topic.onUnsubscribe((session, topic) => {
   console.log(`${session.id} unsubscribed from ${topic.name}`);
-  // 타이머는 자동으로 정리됨
+  // timers are cleaned up automatically
 });
 ```
 
@@ -331,7 +331,7 @@ client.onReady(() => {
   client.subscribe("stock.chart", { symbol: "AAPL", interval: "1m" });
 });
 
-// 토픽별 onUpdate — 배치당 1번 호출
+// per-topic onUpdate — fires once per batch
 client.topic("stock.chart").onUpdate((payload) => {
   console.log(payload.meta.symbol);      // "AAPL"
   console.log(payload.candles.length);   // 200
@@ -340,12 +340,12 @@ client.topic("stock.chart").onUpdate((payload) => {
   });
 });
 
-// 개별 필드 콜백 (선택)
+// per-field callback (optional)
 client.topic("stock.chart").onReceive((key, value) => {
   // key = "candles.0.close", value = 189.50
 });
 
-// 파라미터 변경 → 서버 콜백 재실행
+// change params → server callback re-executes
 document.getElementById("symbol-select")!.onchange = (e) => {
   client.setParams("stock.chart", {
     symbol: (e.target as HTMLSelectElement).value,
@@ -353,7 +353,7 @@ document.getElementById("symbol-select")!.onchange = (e) => {
   });
 };
 
-// 구독 해제
+// unsubscribe
 document.getElementById("close-chart")!.onclick = () => {
   client.unsubscribe("stock.chart");
 };
@@ -395,7 +395,7 @@ server.topic.onSubscribe((session, topic) => {
 
   if (topic.name === "my.dashboard") {
     topic.setCallback(async (event, t, s) => {
-      // s.principal: 인증된 사용자 이름 (예: "alice")
+      // s.principal: authenticated user name (e.g., "alice")
       const user = s.principal!;
 
       if (event === EventType.ChangedParamsEvent) t.payload.clear();
@@ -493,14 +493,14 @@ After:  [101, 102, 103, 104, 105]    → 1 ARRAY_SHIFT_LEFT + 1 new value
 ```
 
 ```typescript
-// 서버 — 새 배열을 그대로 set하면 shift가 자동으로 감지됩니다
+// server — just set the new array and shift is detected automatically
 const prices: number[] = [];
 
 onNewPrice((price) => {
   prices.push(price);
   if (prices.length > 200) prices.shift();
   topic.payload.set("chart", prices);
-  // 왼쪽 shift-by-1 + append로 감지 → 201 프레임 대신 3 프레임
+  // detected as left shift-by-1 + append → 3 frames instead of 201
 });
 ```
 
@@ -563,15 +563,15 @@ Your clients never poll for data. They submit actions through your API, and the 
 
 ```typescript
 const server = new DanWebSocketServer({
-  port: 8080,                       // 또는 server: httpServer (Express 연동)
-  path: "/ws",                       // WebSocket 경로 (기본: "/")
+  port: 8080,                       // or server: httpServer (Express integration)
+  path: "/ws",                       // WebSocket path (default: "/")
   mode: "broadcast",                 // "broadcast" | "principal" | "session_topic" | "session_principal_topic"
-  session: { ttl: 600_000 },         // 연결 끊긴 후 세션 유지 시간 (기본: 10분)
-  principalEvictionTtl: 300_000,     // Principal 데이터 자동 삭제 TTL (기본: 5분, 0=비활성)
-  debug: true,                       // 콘솔 로깅 (또는 커스텀 로거 함수 전달)
-  flushIntervalMs: 100,              // 배치 flush 간격 (기본: 100ms)
-  maxMessageSize: 1_048_576,         // 최대 WebSocket 메시지 크기 (기본: 1MB)
-  maxValueSize: 65_536,              // 최대 단일 값 크기 (기본: 64KB)
+  session: { ttl: 600_000 },         // session TTL after disconnect (default: 10 min)
+  principalEvictionTtl: 300_000,     // principal data auto-eviction TTL (default: 5 min, 0=disabled)
+  debug: true,                       // console logging (or pass a custom logger function)
+  flushIntervalMs: 100,              // batch flush interval (default: 100ms)
+  maxMessageSize: 1_048_576,         // max WebSocket message size (default: 1MB)
+  maxValueSize: 65_536,              // max single value size (default: 64KB)
 });
 ```
 
@@ -596,12 +596,12 @@ httpServer.listen(3000);
 ```typescript
 const client = new DanWebSocketClient("ws://localhost:8080", {
   reconnect: {
-    enabled: true,            // 기본: true
-    maxRetries: 10,           // 0 = 무제한
-    baseDelay: 1000,          // 초기 재시도 지연
-    maxDelay: 30000,          // 최대 재시도 지연
-    backoffMultiplier: 2,     // 지수 백오프
-    jitter: true,             // +/-50% 무작위 지터
+    enabled: true,            // default: true
+    maxRetries: 10,           // 0 = unlimited
+    baseDelay: 1000,          // initial retry delay
+    maxDelay: 30000,          // max retry delay
+    backoffMultiplier: 2,     // exponential backoff
+    jitter: true,             // +/-50% random jitter
   }
 });
 ```
@@ -624,52 +624,52 @@ const client = new DanWebSocketClient("ws://localhost:8080", {
 ### Broadcast Mode
 
 ```typescript
-server.set(key, value)        // 값 설정 — 객체/배열 자동 flat, 변경분만 전송
-server.get(key)               // 현재 값 읽기
-server.keys                   // 등록된 모든 키 경로
-server.clear(key?)            // 키 1개 또는 전체 삭제
+server.set(key, value)        // set value — auto-flatten objects/arrays, send only changes
+server.get(key)               // read current value
+server.keys                   // all registered key paths
+server.clear(key?)            // clear one key or all keys
 ```
 
 ### Principal Mode
 
 ```typescript
-server.principal(name)                // PrincipalTX 인스턴스 반환
-server.principal(name).set(key, value) // 유저별 데이터 설정
-server.principal(name).get(key)        // 값 읽기
-server.principal(name).keys            // 키 목록
-server.principal(name).clear(key?)     // 키 1개 또는 전체 삭제
+server.principal(name)                // returns PrincipalTX instance
+server.principal(name).set(key, value) // set per-user data
+server.principal(name).get(key)        // read value
+server.principal(name).keys            // list of keys
+server.principal(name).clear(key?)     // clear one key or all keys
 ```
 
 ### Topic API (session_topic / session_principal_topic)
 
 ```typescript
-// 서버 — 토픽 구독/해제 콜백
+// server — topic subscribe/unsubscribe callbacks
 server.topic.onSubscribe((session, topic) => { ... });
 server.topic.onUnsubscribe((session, topic) => { ... });
 
-// TopicHandle 메서드
-topic.setCallback(fn)            // 핸들러 등록, 즉시 실행. fn(event, topic, session)
-topic.setDelayedTask(ms)         // 주기적 재실행 시작
-topic.clearDelayedTask()         // 주기적 재실행 중지
-topic.payload.set(key, value)    // 토픽 데이터 설정 (자동 flat)
-topic.payload.get(key)           // 값 읽기
-topic.payload.clear(key?)        // 키 1개 또는 전체 삭제
+// TopicHandle methods
+topic.setCallback(fn)            // register handler, runs immediately. fn(event, topic, session)
+topic.setDelayedTask(ms)         // start periodic re-execution
+topic.clearDelayedTask()         // stop periodic re-execution
+topic.payload.set(key, value)    // set topic data (auto-flatten)
+topic.payload.get(key)           // read value
+topic.payload.clear(key?)        // clear one key or all keys
 ```
 
 ### Auth API (principal / session_principal_topic)
 
 ```typescript
-server.enableAuthorization(true)             // 인증 활성화
-server.onAuthorize((uuid, token) => { ... }) // 인증 요청 콜백
-server.authorize(uuid, token, principalName) // 인증 승인
-server.reject(uuid, reason)                  // 인증 거부
+server.enableAuthorization(true)             // enable auth
+server.onAuthorize((uuid, token) => { ... }) // auth request callback
+server.authorize(uuid, token, principalName) // approve auth
+server.reject(uuid, reason)                  // reject auth
 ```
 
 ### Server Lifecycle
 
 ```typescript
-server.setDebug(true)              // 디버그 로깅 활성화
-server.close()                     // 서버 종료, 모든 연결 닫기
+server.setDebug(true)              // enable debug logging
+server.close()                     // shut down server, close all connections
 ```
 
 ---
@@ -679,27 +679,27 @@ server.close()                     // 서버 종료, 모든 연결 닫기
 ### Connection
 
 ```typescript
-client.connect()                   // 서버에 연결
-client.disconnect()                // 연결 해제
-client.authorize(token)            // 인증 토큰 전송
+client.connect()                   // connect to server
+client.disconnect()                // disconnect
+client.authorize(token)            // send auth token
 ```
 
 ### Data Access
 
 ```typescript
-client.data                        // Proxy — client.data.user.name 형태로 접근
-client.get(key)                    // flat 키로 값 조회: client.get("user.name")
-client.keys                        // 모든 키 경로
+client.data                        // Proxy — access as client.data.user.name
+client.get(key)                    // get value by flat key: client.get("user.name")
+client.keys                        // all key paths
 ```
 
 ### Topic Operations
 
 ```typescript
-client.subscribe(topic, params?)   // 토픽 구독 (파라미터 선택)
-client.unsubscribe(topic)          // 토픽 구독 해제
-client.setParams(topic, params)    // 파라미터 변경 → 서버 콜백 재실행
-client.topic(name).data            // 토픽 데이터 Proxy
-client.topic(name).get(key)        // 토픽 내 flat 키 조회
+client.subscribe(topic, params?)   // subscribe to topic (params optional)
+client.unsubscribe(topic)          // unsubscribe from topic
+client.setParams(topic, params)    // change params → server callback re-executes
+client.topic(name).data            // topic data Proxy
+client.topic(name).get(key)        // get flat key within topic
 ```
 
 ### Events
@@ -708,7 +708,7 @@ All `on*()` methods return an unsubscribe function:
 
 ```typescript
 const unsub = client.onUpdate((state) => { ... });
-unsub(); // 구독 해제
+unsub(); // unsubscribe
 ```
 
 | Event | Fires when |
