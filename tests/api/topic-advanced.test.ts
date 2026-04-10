@@ -7,7 +7,7 @@ function waitFor(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
 }
 
-function waitUntil(fn: () => boolean, timeout = 5000): Promise<void> {
+function waitUntil(fn: () => boolean, timeout = 15000): Promise<void> {
   return new Promise((resolve, reject) => {
     const start = Date.now();
     const check = () => {

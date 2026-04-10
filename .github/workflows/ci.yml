@@ -2,9 +2,11 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    # CI only runs on main. `versions/*` branches are read-only release
+    # snapshots and must NOT trigger builds.
+    branches: [main]
   pull_request:
-    branches: [main, master]
+    branches: [main]
 
 jobs:
   test:
