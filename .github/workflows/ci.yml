@@ -1,12 +1,12 @@
 name: CI
 
 on:
-  push:
-    # CI only runs on main. `versions/*` branches are read-only release
-    # snapshots and must NOT trigger builds.
-    branches: [main]
+  # No automatic push builds. Tests are validated locally before committing,
+  # and the release workflow runs on tag push. CI only runs for pull requests
+  # (to vet external contributions) or on explicit manual dispatch.
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   test:
