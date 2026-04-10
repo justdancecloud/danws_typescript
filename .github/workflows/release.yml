@@ -30,11 +30,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build
+      - name: Build (skip tests — already validated on main CI and locally before tagging)
         run: npm run build
-
-      - name: Test (excluding stress)
-        run: npm test
 
       - name: Pack tarball
         run: npm pack
