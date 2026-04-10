@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.4.3] - 2026-04-11
+### Added
+- Automated release workflow (`.github/workflows/release.yml`) — on `v*` tag push, the workflow runs tests, builds `dist/`, publishes to npmjs.org and GitHub Packages (scoped `@justdancecloud/dan-websocket`), and creates a GitHub Release with attached `.tgz` + individual bundles.
+
 ## [2.4.2] - 2026-04-11
 ### Fixed
 - **VarInteger decode performance:** replaced `Math.pow(2, shift)` in the VarInt hot path with a running multiplier — faster, same math, preserves the `Number.MAX_SAFE_INTEGER` range.

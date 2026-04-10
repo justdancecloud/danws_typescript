@@ -1,0 +1,91 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version from tag
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Use Node.js 20 (npmjs registry default)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Test (excluding stress)
+        run: npm test
+
+      - name: Pack tarball
+        run: npm pack
+
+      - name: Publish to npmjs.org
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Prepare scoped package for GitHub Packages
+        run: |
+          mkdir -p build/gh-package
+          cp -r dist build/gh-package/
+          cp dan-protocol.md README.md LICENSE build/gh-package/
+          node -e "
+            const fs = require('fs');
+            const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            p.name = '@justdancecloud/dan-websocket';
+            p.publishConfig = { registry: 'https://npm.pkg.github.com', access: 'public' };
+            delete p.scripts;
+            delete p.devDependencies;
+            fs.writeFileSync('build/gh-package/package.json', JSON.stringify(p, null, 2));
+          "
+
+      - name: Setup Node for GitHub Packages
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: "https://npm.pkg.github.com"
+          scope: "@justdancecloud"
+
+      - name: Publish to GitHub Packages
+        working-directory: build/gh-package
+        run: npm publish --ignore-scripts
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create GitHub Release with artifacts
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            dan-websocket-${{ steps.ver.outputs.version }}.tgz
+            dist/index.js
+            dist/index.cjs
+            dist/index.d.ts
+            dist/server.js
+            dist/server.cjs
+            dist/server.d.ts
+            dist/protocol.js
+            dist/protocol.cjs
+            dist/protocol.d.ts
