@@ -2,9 +2,13 @@
 
 > Objects in, objects out, binary in between — only changed fields travel the wire.
 
-[![npm](https://img.shields.io/npm/v/dan-websocket)](https://www.npmjs.com/package/dan-websocket)
-[![Maven Central](https://img.shields.io/maven-central/v/io.github.justdancecloud/dan-websocket)](https://central.sonatype.com/artifact/io.github.justdancecloud/dan-websocket)
+[![npm](https://img.shields.io/npm/v/dan-websocket?label=npm)](https://www.npmjs.com/package/dan-websocket)
+[![npm downloads](https://img.shields.io/npm/dm/dan-websocket)](https://www.npmjs.com/package/dan-websocket)
+[![GitHub Packages](https://img.shields.io/github/v/release/justdancecloud/danws_typescript?label=GitHub%20Packages&color=blue)](https://github.com/justdancecloud/danws_typescript/packages)
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.justdancecloud/dan-websocket?label=Maven%20Central%20(Java))](https://central.sonatype.com/artifact/io.github.justdancecloud/dan-websocket)
+[![CI](https://github.com/justdancecloud/danws_typescript/actions/workflows/ci.yml/badge.svg)](https://github.com/justdancecloud/danws_typescript/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![Node](https://img.shields.io/node/v/dan-websocket)](https://www.npmjs.com/package/dan-websocket)
 
 ```
 npm install dan-websocket
