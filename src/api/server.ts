@@ -1,6 +1,6 @@
 import { WebSocketServer as WSServer, WebSocket as WS } from "ws";
 import type { Server as HttpServer } from "http";
-import { DataType, FrameType, DanWSError } from "../protocol/types.js";
+import { DataType, FrameType, DanWSError, toError} from "../protocol/types.js";
 import type { Frame } from "../protocol/types.js";
 import { encode, encodeHeartbeat } from "../protocol/codec.js";
 import { createStreamParser } from "../protocol/stream-parser.js";
@@ -57,6 +57,10 @@ interface TopicNamespaceInternal extends TopicNamespace {
 }
 
 export class DanWebSocketServer {
+  /** Protocol version: 3.5 */
+  static readonly PROTOCOL_MAJOR = 3;
+  static readonly PROTOCOL_MINOR = 5;
+
   readonly mode: ServerMode;
   readonly topic: TopicNamespace;
 
@@ -76,6 +80,8 @@ export class DanWebSocketServer {
   private _tmpSessions = new Map<string, InternalSession>();
   private _principalIndex = new Map<string, Set<InternalSession>>();
   private _principalEvictionTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Pending close timers scheduled by reject() — tracked so close() can clear them. */
+  private _pendingCloseTimers = new Set<ReturnType<typeof setTimeout>>();
 
   // Callbacks (backward compat)
   private _onConnection: Array<(session: DanWebSocketSession) => void> = [];
@@ -211,7 +217,15 @@ export class DanWebSocketServer {
 
     if (internal.ws) {
       const ws = internal.ws;
-      setTimeout(() => { try { ws.close(); } catch {} }, 50);
+      // Delay close so the AUTH_FAIL frame can flush. Track the timer in
+      // _pendingCloseTimers so server.close() can cancel it — otherwise a
+      // pending reject() would leave a dangling timer in Node's event loop
+      // and fire a ws.close() on an already-destroyed socket.
+      const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
+        this._pendingCloseTimers.delete(timer);
+        try { ws.close(); } catch {}
+      }, 50);
+      this._pendingCloseTimers.add(timer);
     }
   }
 
@@ -252,6 +266,8 @@ export class DanWebSocketServer {
     this._principalIndex.clear();
     for (const timer of this._principalEvictionTimers.values()) clearTimeout(timer);
     this._principalEvictionTimers.clear();
+    for (const timer of this._pendingCloseTimers) clearTimeout(timer);
+    this._pendingCloseTimers.clear();
     this._wss.close();
   }
 
@@ -357,6 +373,18 @@ export class DanWebSocketServer {
         if (frame.frameType !== FrameType.Identify) { ws.close(); return; }
         const payload = frame.payload;
         if (payload instanceof Uint8Array && (payload.length === 16 || payload.length === 18)) {
+          // 18-byte payloads carry [major, minor] at offsets 16..17.
+          // Reject mismatched majors; legacy 16-byte payloads are still accepted.
+          if (payload.length === 18) {
+            const clientMajor = payload[16];
+            if (clientMajor !== DanWebSocketServer.PROTOCOL_MAJOR) {
+              this._log(
+                `Rejecting client with incompatible protocol major: ${clientMajor} (server: ${DanWebSocketServer.PROTOCOL_MAJOR})`,
+              );
+              ws.close();
+              return;
+            }
+          }
           clientUuid = bytesToUuid(payload.subarray(0, 16));
         } else { ws.close(); return; }
 
@@ -371,7 +399,7 @@ export class DanWebSocketServer {
         if (internal && this._authEnabled) {
           const token = frame.payload as string;
           internal.authController.handleAuth(token);
-          for (const cb of this._onAuthorize) { try { cb(clientUuid, token); } catch (e) { this._log("onAuthorize callback error", e as Error); } }
+          for (const cb of this._onAuthorize) { try { cb(clientUuid, token); } catch (e) { this._log("onAuthorize callback error", toError(e)); } }
         }
         return;
       }
@@ -466,7 +494,7 @@ export class DanWebSocketServer {
   private _activateSession(internal: InternalSession, principal: string): void {
     if (this._isTopicMode) {
       internal.session._bindSessionTX((f) => internal.bulkQueue.enqueue(f));
-      for (const cb of this._onConnection) { try { cb(internal.session); } catch (e) { this._log("onConnection callback error", e as Error); } }
+      for (const cb of this._onConnection) { try { cb(internal.session); } catch (e) { this._log("onConnection callback error", toError(e)); } }
       internal.bulkQueue.enqueue({
         frameType: FrameType.ServerSync,
         keyId: 0, dataType: DataType.Null, payload: null,
@@ -483,7 +511,7 @@ export class DanWebSocketServer {
         () => ptx._buildValueFrames(),
       );
 
-      for (const cb of this._onConnection) { try { cb(internal.session); } catch (e) { this._log("onConnection callback error", e as Error); } }
+      for (const cb of this._onConnection) { try { cb(internal.session); } catch (e) { this._log("onConnection callback error", toError(e)); } }
       internal.session._startSync();
     }
   }
@@ -563,10 +591,10 @@ export class DanWebSocketServer {
         // Fire new API callbacks
         const handle = session.getTopicHandle(oldName);
         if (handle) {
-          for (const cb of (this.topic as TopicNamespaceInternal)._onUnsubscribeCbs) { try { cb(session, handle); } catch (e) { this._log("topic.onUnsubscribe callback error", e as Error); } }
+          for (const cb of (this.topic as TopicNamespaceInternal)._onUnsubscribeCbs) { try { cb(session, handle); } catch (e) { this._log("topic.onUnsubscribe callback error", toError(e)); } }
         }
         // Fire backward compat callbacks
-        for (const cb of this._onTopicUnsubscribe) { try { cb(session, oldName); } catch (e) { this._log("onTopicUnsubscribe callback error", e as Error); } }
+        for (const cb of this._onTopicUnsubscribe) { try { cb(session, oldName); } catch (e) { this._log("onTopicUnsubscribe callback error", toError(e)); } }
         // Remove
         session._removeTopicHandle(oldName);
         session._removeTopic(oldName);
@@ -583,9 +611,9 @@ export class DanWebSocketServer {
         const clientIdx = nameToIndex.get(name) ?? session._nextTopicIndex;
         const handle = session._createTopicHandle(name, params, clientIdx);
         // Fire new API callbacks
-        for (const cb of (this.topic as TopicNamespaceInternal)._onSubscribeCbs) { try { cb(session, handle); } catch (e) { this._log("topic.onSubscribe callback error", e as Error); } }
+        for (const cb of (this.topic as TopicNamespaceInternal)._onSubscribeCbs) { try { cb(session, handle); } catch (e) { this._log("topic.onSubscribe callback error", toError(e)); } }
         // Fire backward compat callbacks
-        for (const cb of this._onTopicSubscribe) { try { cb(session, { name, params }); } catch (e) { this._log("onTopicSubscribe callback error", e as Error); } }
+        for (const cb of this._onTopicSubscribe) { try { cb(session, { name, params }); } catch (e) { this._log("onTopicSubscribe callback error", toError(e)); } }
       } else {
         // Check params changed
         const oldParams = existingHandle ? existingHandle.params : existingInfo?.params;
@@ -597,7 +625,7 @@ export class DanWebSocketServer {
           }
           // Update backward compat
           session._updateTopicParams(name, params);
-          for (const cb of this._onTopicParamsChange) { try { cb(session, { name, params }); } catch (e) { this._log("onTopicParamsChange callback error", e as Error); } }
+          for (const cb of this._onTopicParamsChange) { try { cb(session, { name, params }); } catch (e) { this._log("onTopicParamsChange callback error", toError(e)); } }
         }
       }
     }
@@ -632,7 +660,7 @@ export class DanWebSocketServer {
           this._schedulePrincipalEviction(effectivePrincipal);
         }
       }
-      for (const cb of this._onSessionExpired) { try { cb(internal.session); } catch (e) { this._log("onSessionExpired callback error", e as Error); } }
+      for (const cb of this._onSessionExpired) { try { cb(internal.session); } catch (e) { this._log("onSessionExpired callback error", toError(e)); } }
     }, this._ttl);
   }
 

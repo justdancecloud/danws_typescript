@@ -1,4 +1,5 @@
 import { KeyRegistry } from "../state/key-registry.js";
+import { toError } from "../protocol/types.js";
 import { createStateProxy } from "./state-proxy.js";
 
 export interface TopicClientPayloadView {
@@ -71,7 +72,7 @@ export class TopicClientHandle {
   /** @internal — fire onReceive per-frame, mark dirty for batch onUpdate */
   _notify(userKey: string, value: unknown): void {
     for (const cb of this._onReceive) {
-      try { cb(userKey, value); } catch (e) { if (this._log) this._log("topic onReceive error", e as Error); }
+      try { cb(userKey, value); } catch (e) { if (this._log) this._log("topic onReceive error", toError(e)); }
     }
     this._dirty = true;
   }
@@ -82,7 +83,7 @@ export class TopicClientHandle {
     this._dirty = false;
     const view = this._createPayloadView();
     for (const cb of this._onUpdate) {
-      try { cb(view); } catch (e) { if (this._log) this._log("topic onUpdate error", e as Error); }
+      try { cb(view); } catch (e) { if (this._log) this._log("topic onUpdate error", toError(e)); }
     }
   }
 

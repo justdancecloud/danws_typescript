@@ -43,7 +43,7 @@ You write plain objects. dan-websocket auto-flattens them into binary leaf keys,
 
 |  | **dan-websocket** | **Socket.IO** | **Firebase RTDB** | **Ably** |
 |---|---|---|---|---|
-| Protocol | Binary (DanProtocol v3.4) | JSON over Engine.IO | JSON (internal) | MessagePack / JSON |
+| Protocol | Binary (DanProtocol v3.5) | JSON over Engine.IO | JSON (internal) | MessagePack / JSON |
 | Self-hosted | Yes | Yes | No (Google Cloud) | No (SaaS) |
 | Price | Free (MIT) | Free (MIT) | Pay-per-use | $49+/mo |
 | Field-level dedup | Automatic | No | Partial | No |
@@ -802,7 +802,7 @@ client.onError((err) => {
 
 ## Protocol
 
-dan-websocket uses **DanProtocol v3.4** — a binary, DLE-framed protocol with 16 data types. See [dan-protocol.md](./dan-protocol.md) for the full specification.
+dan-websocket uses **DanProtocol v3.5** — a binary, DLE-framed protocol with 16 data types. See [dan-protocol.md](./dan-protocol.md) for the full specification.
 
 **Key protocol features:**
 - DLE-framed: self-synchronizing frames without length prefixes

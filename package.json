@@ -1,6 +1,6 @@
 {
   "name": "dan-websocket",
-  "version": "2.4.1",
+  "version": "2.4.2",
   "description": "Lightweight binary protocol for real-time state synchronization",
   "type": "module",
   "exports": {
@@ -26,8 +26,9 @@
   ],
   "scripts": {
     "build": "tsup",
-    "test": "vitest run",
+    "test": "vitest run --exclude tests/api/stress.test.ts",
     "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage --exclude tests/api/stress.test.ts",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
@@ -53,12 +54,19 @@
   "devDependencies": {
     "@types/node": "^25.5.2",
     "@types/ws": "^8.18.1",
+    "@vitest/coverage-v8": "^4.1.2",
     "tsup": "^8.5.1",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2",
-    "vitest": "^4.1.2"
-  },
-  "dependencies": {
+    "vitest": "^4.1.2",
     "ws": "^8.20.0"
+  },
+  "peerDependencies": {
+    "ws": "^8.0.0"
+  },
+  "peerDependenciesMeta": {
+    "ws": {
+      "optional": true
+    }
   }
 }

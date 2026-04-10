@@ -1,4 +1,4 @@
-import { DataType, FrameType, DanWSError } from "../protocol/types.js";
+import { DataType, FrameType, DanWSError, toError} from "../protocol/types.js";
 import type { Frame } from "../protocol/types.js";
 import { encode } from "../protocol/codec.js";
 import { createStreamParser } from "../protocol/stream-parser.js";
@@ -341,7 +341,7 @@ export class DanWebSocketClient {
             }
           } else {
             for (const cb of this._onReceive) {
-              try { cb(keyPath, pending.payload); } catch (e) { this._log("onReceive callback error", e as Error); }
+              try { cb(keyPath, pending.payload); } catch (e) { this._log("onReceive callback error", toError(e)); }
             }
           }
         }
@@ -404,7 +404,7 @@ export class DanWebSocketClient {
           } else {
             // Global key (broadcast/principal/flat session)
             for (const cb of this._onReceive) {
-              try { cb(entry.path, frame.payload); } catch (e) { this._log("onReceive callback error", e as Error); }
+              try { cb(entry.path, frame.payload); } catch (e) { this._log("onReceive callback error", toError(e)); }
             }
           }
         }
@@ -453,9 +453,12 @@ export class DanWebSocketClient {
             prefix = lengthPath.slice(0, lengthPath.length - ".length".length);
           }
 
-          const shiftCount = frame.payload as number;
+          const rawShift = frame.payload as number;
           const currentLenObj = this._store.get(frame.keyId);
           const currentLength = typeof currentLenObj === "number" ? currentLenObj : 0;
+          // Clamp: negative or oversized shift counts from a malformed/hostile
+          // server would under/overflow the loop bounds.
+          const shiftCount = Math.max(0, Math.min(rawShift | 0, currentLength));
 
           // Shift values left: prefix.0 <- prefix.{shift}, prefix.1 <- prefix.{shift+1}, etc.
           for (let i = 0; i < currentLength - shiftCount; i++) {
@@ -479,7 +482,7 @@ export class DanWebSocketClient {
             }
           } else {
             for (const cb of this._onReceive) {
-              try { cb(prefix + ".length", newLength); } catch (e) { this._log("onReceive callback error", e as Error); }
+              try { cb(prefix + ".length", newLength); } catch (e) { this._log("onReceive callback error", toError(e)); }
             }
           }
         }
@@ -507,9 +510,11 @@ export class DanWebSocketClient {
             prefix = lengthPath.slice(0, lengthPath.length - ".length".length);
           }
 
-          const shiftCount = frame.payload as number;
+          const rawShift = frame.payload as number;
           const currentLenObj = this._store.get(frame.keyId);
           const currentLength = typeof currentLenObj === "number" ? currentLenObj : 0;
+          // Clamp: negative or oversized shift counts from a malformed/hostile server.
+          const shiftCount = Math.max(0, Math.min(rawShift | 0, currentLength));
 
           // Shift values right: iterate from high to low to avoid overwriting
           for (let i = currentLength - 1; i >= 0; i--) {
@@ -531,7 +536,7 @@ export class DanWebSocketClient {
             }
           } else {
             for (const cb of this._onReceive) {
-              try { cb(prefix + ".length", currentLength); } catch (e) { this._log("onReceive callback error", e as Error); }
+              try { cb(prefix + ".length", currentLength); } catch (e) { this._log("onReceive callback error", toError(e)); }
             }
           }
         }
@@ -543,7 +548,7 @@ export class DanWebSocketClient {
         if (this._onUpdate.length > 0) {
           const view = createStateProxy((k) => this.get(k), () => this.keys);
           for (const cb of this._onUpdate) {
-            try { cb(view); } catch (e) { this._log("onUpdate callback error", e as Error); }
+            try { cb(view); } catch (e) { this._log("onUpdate callback error", toError(e)); }
           }
         }
         // Flush topic-level onUpdate callbacks
@@ -574,7 +579,7 @@ export class DanWebSocketClient {
             }
           } else {
             for (const cb of this._onReceive) {
-              try { cb(deletedEntry.path, undefined); } catch (e) { this._log("onReceive callback error", e as Error); }
+              try { cb(deletedEntry.path, undefined); } catch (e) { this._log("onReceive callback error", toError(e)); }
             }
           }
         }
@@ -713,14 +718,17 @@ export class DanWebSocketClient {
 
   private _emit<T extends unknown[]>(callbacks: Array<(...args: T) => void>, ...args: T): void {
     for (const cb of callbacks) {
-      try { cb(...args); } catch (e) { this._log("Callback error", e as Error); }
+      try { cb(...args); } catch (e) { this._log("Callback error", toError(e)); }
     }
   }
 
   private _emitError(err: DanWSError): void {
     if (this._onError.length === 0) {
-      // No error listeners — throw to avoid silent failure (like Node.js EventEmitter)
-      throw err;
+      // No error listeners — log instead of throwing. Throwing from inside
+      // ws callbacks / parser feed / reconnect scheduler can crash the host
+      // (esp. in Node where unhandledException aborts the process).
+      this._log(`Unhandled DanWSError: ${err.code} ${err.message}`, err);
+      return;
     }
     this._emit(this._onError, err);
   }

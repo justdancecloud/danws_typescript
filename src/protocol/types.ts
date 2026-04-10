@@ -65,6 +65,13 @@ export class DanWSError extends globalThis.Error {
   }
 }
 
+/** Normalize an unknown thrown value into an Error. Safer than `e as Error`
+ *  because JS/TS code is allowed to `throw "string"` or `throw { ... }`. */
+export function toError(e: unknown): Error {
+  if (e instanceof Error) return e;
+  return new Error(typeof e === "string" ? e : JSON.stringify(e));
+}
+
 /** Check if a frame type is a signal (no payload). */
 export function isSignalFrame(ft: FrameType): boolean {
   return (

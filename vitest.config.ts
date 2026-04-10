@@ -4,5 +4,24 @@ export default defineConfig({
   test: {
     pool: "forks",
     maxForks: "100%",
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "html", "lcov"],
+      include: ["src/**/*.ts"],
+      exclude: [
+        "src/**/*.d.ts",
+        "src/**/index.ts",
+        "tests/**",
+        "dist/**",
+      ],
+      // Stress tests are excluded from the default run, so they shouldn't
+      // affect coverage counts either.
+      thresholds: {
+        lines: 75,
+        functions: 75,
+        branches: 70,
+        statements: 75,
+      },
+    },
   },
 });

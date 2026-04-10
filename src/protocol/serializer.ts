@@ -229,13 +229,15 @@ function encodeVarInt(value: number): Uint8Array {
 }
 
 function decodeVarIntFromPayload(payload: Uint8Array, offset: number = 0): number {
+  // Running multiplier avoids Math.pow call per byte and keeps values beyond
+  // 2^31 accurate (JS bitwise ops are 32-bit signed, so `<<` would wrap).
   let value = 0;
-  let shift = 0;
+  let multiplier = 1;
   let i = offset;
   while (i < payload.length) {
     const byte = payload[i];
-    value += (byte & 0x7F) * Math.pow(2, shift);
-    shift += 7;
+    value += (byte & 0x7F) * multiplier;
+    multiplier *= 128;
     i++;
     if ((byte & 0x80) === 0) break;
   }

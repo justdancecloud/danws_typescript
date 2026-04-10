@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.4.2] - 2026-04-11
+### Fixed
+- **VarInteger decode performance:** replaced `Math.pow(2, shift)` in the VarInt hot path with a running multiplier — faster, same math, preserves the `Number.MAX_SAFE_INTEGER` range.
+- **ArrayShift bounds:** shift count is now clamped to `[0, currentLength]`, rejecting malformed or hostile `ArrayShiftLeft/Right` frames.
+- **Unhandled error escalation:** `_emitError` now logs via the debug channel instead of throwing when no `onError` listener is registered, so a missing listener no longer crashes the Node host or tears down WS callbacks.
+
+### Added
+- **Server protocol version check:** 18-byte `Identify` payloads have their major version validated against `PROTOCOL_MAJOR=3`; mismatched clients are closed.
+- **Working samples:** `danws_typescript_server_sample` and `danws_typescript_client_sample` now contain runnable broadcast-mode examples (previously empty directories).
+
+### Changed
+- Protocol constant bumped to **3.5** (`AuthController.PROTOCOL_VERSION = [3, 5]`).
+- `ws` moved from `dependencies` to optional `peerDependencies` — browser bundlers no longer pull in Node's `ws` package. Node consumers install `ws` explicitly.
+- README updated to reference DanProtocol v3.5 (was v3.4).
+
 ## [2.4.1] - 2026-04-08
 ### Changed
 - Version sync with Java release (thread safety is Java-only, no TS changes)

@@ -1,4 +1,5 @@
 import type { Frame } from "../protocol/types.js";
+import { toError } from "../protocol/types.js";
 import { FlatStateManager } from "./flat-state-manager.js";
 import type { DanWebSocketSession } from "./session.js";
 
@@ -86,9 +87,9 @@ export class TopicHandle {
     this._callback = fn;
     try {
       const r = fn(EventType.SubscribeEvent, this, this._session);
-      if (r instanceof Promise) r.catch((e) => { if (this._log) this._log("topic callback error", e as Error); });
+      if (r instanceof Promise) r.catch((e) => { if (this._log) this._log("topic callback error", toError(e)); });
     } catch (e) {
-      if (this._log) this._log("topic setCallback error", e as Error);
+      if (this._log) this._log("topic setCallback error", toError(e));
     }
   }
 
@@ -99,9 +100,9 @@ export class TopicHandle {
       if (this._callback) {
         try {
           const r = this._callback(EventType.DelayedTaskEvent, this, this._session);
-          if (r instanceof Promise) r.catch((e) => { if (this._log) this._log("delayed task error", e as Error); });
+          if (r instanceof Promise) r.catch((e) => { if (this._log) this._log("delayed task error", toError(e)); });
         } catch (e) {
-          if (this._log) this._log("delayed task error", e as Error);
+          if (this._log) this._log("delayed task error", toError(e));
         }
       }
     }, ms);
@@ -125,9 +126,9 @@ export class TopicHandle {
     if (this._callback) {
       try {
         const r = this._callback(EventType.ChangedParamsEvent, this, this._session);
-        if (r instanceof Promise) r.catch((e) => { if (this._log) this._log("params change callback error", e as Error); });
+        if (r instanceof Promise) r.catch((e) => { if (this._log) this._log("params change callback error", toError(e)); });
       } catch (e) {
-        if (this._log) this._log("params change callback error", e as Error);
+        if (this._log) this._log("params change callback error", toError(e));
       }
     }
 

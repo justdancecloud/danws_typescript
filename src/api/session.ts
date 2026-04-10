@@ -1,4 +1,4 @@
-import { DataType, FrameType, DanWSError } from "../protocol/types.js";
+import { DataType, FrameType, DanWSError, toError} from "../protocol/types.js";
 import type { Frame } from "../protocol/types.js";
 import { FlatStateManager } from "./flat-state-manager.js";
 import { TopicHandle, TopicPayload } from "./topic-handle.js";
@@ -432,7 +432,7 @@ export class DanWebSocketSession {
   private _emit<T extends unknown[]>(callbacks: Array<(...args: T) => void>, ...args: T): void {
     for (const cb of callbacks) {
       try { cb(...args); } catch (e) {
-        this._log("callback error", e as Error);
+        this._log("callback error", toError(e));
       }
     }
   }

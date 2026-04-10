@@ -117,8 +117,8 @@ export class AuthController {
 
   // ──── Client side ────
 
-  /** Current protocol version: 3.3 → major=3, minor=3. */
-  static readonly PROTOCOL_VERSION = [3, 3] as const;
+  /** Current protocol version: 3.5 → major=3, minor=5. */
+  static readonly PROTOCOL_VERSION = [3, 5] as const;
 
   /**
    * Build IDENTIFY frame from UUID string.
