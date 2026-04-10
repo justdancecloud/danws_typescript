@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.4.4] - 2026-04-11
+### Removed
+- **`"individual"` ServerMode** — deleted. It was silently aliased to `"principal"` at construction time; the type union entry was misleading. Use `"principal"` directly.
+- **Dead code**: unused `TopicClientPayloadView` import, `encodeHeartbeat` import in server, `_clientReadyReceived` write-only field in session, unused `keysFn` parameters in `state-proxy` helpers.
+
+### Added
+- **KeyId overflow guard**: `KeyRegistry.register()` throws `KEY_ID_OVERFLOW` when exhausting the 32-bit keyId space.
+
+### Fixed
+- **`BulkQueue` emits `ServerFlushEnd` only for the server direction.** Client-side `BulkQueue` no longer appends the marker frame — it's a server→client signal and clients were wrongly emitting it.
+- **Server `on*` listeners now return unsubscribe functions** for API parity with the client-side `on*` methods.
+- **`createStateProxy` root is cached per client** instead of being recreated on every `.data` access.
+- **`_getWebSocketImpl()` typed as `new (url: string) => WebSocket`** instead of `any`.
+- **CI test timeout bumped to 20s** (`vitest.config.ts` + `waitUntil` defaults) to accommodate slower GitHub Actions runners that were timing out on integration tests.
+
 ## [2.4.3] - 2026-04-11
 ### Added
 - Automated release workflow (`.github/workflows/release.yml`) — on `v*` tag push, the workflow runs tests, builds `dist/`, publishes to npmjs.org and GitHub Packages (scoped `@justdancecloud/dan-websocket`), and creates a GitHub Release with attached `.tgz` + individual bundles.
