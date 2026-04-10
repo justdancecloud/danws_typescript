@@ -2,7 +2,7 @@ import { WebSocketServer as WSServer, WebSocket as WS } from "ws";
 import type { Server as HttpServer } from "http";
 import { DataType, FrameType, DanWSError, toError} from "../protocol/types.js";
 import type { Frame } from "../protocol/types.js";
-import { encode, encodeHeartbeat } from "../protocol/codec.js";
+import { encode } from "../protocol/codec.js";
 import { createStreamParser } from "../protocol/stream-parser.js";
 import { AuthController, bytesToUuid, uuidToBytes } from "../state/auth-controller.js";
 import { BulkQueue } from "../connection/bulk-queue.js";
@@ -13,7 +13,7 @@ import type { TopicInfo } from "./session.js";
 import { TopicHandle } from "./topic-handle.js";
 import { KeyRegistry } from "../state/key-registry.js";
 
-export type ServerMode = "broadcast" | "principal" | "individual" | "session_topic" | "session_principal_topic";
+export type ServerMode = "broadcast" | "principal" | "session_topic" | "session_principal_topic";
 
 export interface ServerOptions {
   port?: number;
@@ -99,9 +99,7 @@ export class DanWebSocketServer {
       throw new DanWSError("INVALID_OPTIONS", "Must specify either port or server");
     }
 
-    let mode = options.mode ?? "principal";
-    if (mode === "individual") mode = "principal";
-    this.mode = mode;
+    this.mode = options.mode ?? "principal";
 
     this._path = options.path ?? "/";
     this._ttl = options.session?.ttl ?? 600_000;
@@ -188,7 +186,11 @@ export class DanWebSocketServer {
     if (options?.timeout != null) this._authTimeout = options.timeout;
   }
 
-  authorize(clientUuid: string, token: string, principal: string): void {
+  /** Accept a client's auth request. `token` is currently unused server-side —
+   *  the caller is expected to validate the token inside `onAuthorize` before
+   *  calling `authorize()`. Kept in the signature so the token is easily
+   *  available for logging/tracing hooks and for future validation logic. */
+  authorize(clientUuid: string, _token: string, principal: string): void {
     const internal = this._tmpSessions.get(clientUuid);
     if (!internal) return;
 
@@ -272,13 +274,19 @@ export class DanWebSocketServer {
   }
 
   // ──── Event registration (backward compat) ────
+  // Each registration returns an unsubscribe function for API parity with the
+  // client-side on*() methods.
 
-  onConnection(cb: (session: DanWebSocketSession) => void): void { this._onConnection.push(cb); }
-  onAuthorize(cb: (clientUuid: string, token: string) => void): void { this._onAuthorize.push(cb); }
-  onSessionExpired(cb: (session: DanWebSocketSession) => void): void { this._onSessionExpired.push(cb); }
-  onTopicSubscribe(cb: (session: DanWebSocketSession, topic: TopicInfo) => void): void { this._onTopicSubscribe.push(cb); }
-  onTopicUnsubscribe(cb: (session: DanWebSocketSession, topicName: string) => void): void { this._onTopicUnsubscribe.push(cb); }
-  onTopicParamsChange(cb: (session: DanWebSocketSession, topic: TopicInfo) => void): void { this._onTopicParamsChange.push(cb); }
+  private _sub<T extends (...args: any[]) => void>(arr: T[], cb: T): () => void {
+    arr.push(cb);
+    return () => { const i = arr.indexOf(cb); if (i !== -1) arr.splice(i, 1); };
+  }
+  onConnection(cb: (session: DanWebSocketSession) => void): () => void { return this._sub(this._onConnection, cb); }
+  onAuthorize(cb: (clientUuid: string, token: string) => void): () => void { return this._sub(this._onAuthorize, cb); }
+  onSessionExpired(cb: (session: DanWebSocketSession) => void): () => void { return this._sub(this._onSessionExpired, cb); }
+  onTopicSubscribe(cb: (session: DanWebSocketSession, topic: TopicInfo) => void): () => void { return this._sub(this._onTopicSubscribe, cb); }
+  onTopicUnsubscribe(cb: (session: DanWebSocketSession, topicName: string) => void): () => void { return this._sub(this._onTopicUnsubscribe, cb); }
+  onTopicParamsChange(cb: (session: DanWebSocketSession, topic: TopicInfo) => void): () => void { return this._sub(this._onTopicParamsChange, cb); }
 
   // ──── Mode guard ────
 

@@ -34,7 +34,6 @@ export class DanWebSocketSession {
 
   // Sync tracking
   private _serverSyncSent = false;
-  private _clientReadyReceived = false;
 
   // ──── Session-level flat TX store (topic modes backward compat) ────
   private _nextKeyId = 1;
@@ -176,7 +175,6 @@ export class DanWebSocketSession {
   _startSync(): void {
     this._state = "synchronizing";
     this._serverSyncSent = false;
-    this._clientReadyReceived = false;
 
     if (this._txKeyFrameProvider && this._enqueueFrame) {
       const frames = this._txKeyFrameProvider();
@@ -201,7 +199,6 @@ export class DanWebSocketSession {
     switch (frame.frameType) {
       case FrameType.ClientReady:
         if (this._state === "ready") return; // already synced — ignore
-        this._clientReadyReceived = true;
         if (this._txValueFrameProvider && this._enqueueFrame) {
           for (const vf of this._txValueFrameProvider()) this._enqueueFrame(vf);
         }
@@ -220,7 +217,6 @@ export class DanWebSocketSession {
             keyId: 0, dataType: DataType.Null, payload: null,
           });
           for (const f of this._txKeyFrameProvider()) this._enqueueFrame(f);
-          this._clientReadyReceived = false;
         }
         break;
 

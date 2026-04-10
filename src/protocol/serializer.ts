@@ -3,7 +3,11 @@ import { DataType, DATA_TYPE_SIZES, DanWSError } from "./types.js";
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder("utf-8", { fatal: true });
 
-// Reusable buffer for numeric serialization — eliminates 2 of 3 allocations per numeric value
+// Reusable buffer for numeric serialization — eliminates 2 of 3 allocations per numeric value.
+// Safe because JavaScript runs on a single thread per agent: the buffer is written and
+// copied (via `.slice()`) synchronously within one `serialize` call before any other code
+// runs. If this module is ever reused from a Worker, each Worker gets its own copy of
+// the module and therefore its own buffer — the singleton is per-realm, not per-process.
 const _sharedBuf = new ArrayBuffer(8);
 const _sharedView = new DataView(_sharedBuf);
 const _sharedBytes = new Uint8Array(_sharedBuf);

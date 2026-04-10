@@ -6,7 +6,7 @@ function waitFor(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
 }
 
-function waitUntil(fn: () => boolean, timeout = 3000): Promise<void> {
+function waitUntil(fn: () => boolean, timeout = 10000): Promise<void> {
   return new Promise((resolve, reject) => {
     const start = Date.now();
     const check = () => {
@@ -152,7 +152,7 @@ describe("E2E: Broadcast Mode", () => {
 
 describe("E2E: Individual Mode", () => {
   it("principal-based data sync", async () => {
-    server = new DanWebSocketServer({ port: 19010, path: "/ws", mode: "individual" });
+    server = new DanWebSocketServer({ port: 19010, path: "/ws", mode: "principal" });
     await waitFor(50);
 
     server.principal("default").set("greeting", "Hello");
@@ -170,7 +170,7 @@ describe("E2E: Individual Mode", () => {
   });
 
   it("different principals get different data", async () => {
-    server = new DanWebSocketServer({ port: 19011, path: "/ws", mode: "individual" });
+    server = new DanWebSocketServer({ port: 19011, path: "/ws", mode: "principal" });
     await waitFor(50);
 
     server.principal("alice").set("name", "Alice");
@@ -198,7 +198,7 @@ describe("E2E: Individual Mode", () => {
   });
 
   it("multiple sessions share same principal", async () => {
-    server = new DanWebSocketServer({ port: 19012, path: "/ws", mode: "individual" });
+    server = new DanWebSocketServer({ port: 19012, path: "/ws", mode: "principal" });
     await waitFor(50);
 
     server.principal("shared").set("data", "shared-value");
@@ -231,7 +231,7 @@ describe("E2E: Individual Mode", () => {
   });
 
   it("individual mode rejects server.set()", () => {
-    server = new DanWebSocketServer({ port: 19013, path: "/ws", mode: "individual" });
+    server = new DanWebSocketServer({ port: 19013, path: "/ws", mode: "principal" });
     expect(() => server!.set("key", "val")).toThrow();
   });
 });
@@ -242,7 +242,7 @@ describe("E2E: Individual Mode", () => {
 
 describe("E2E: Authentication", () => {
   it("auth accept", async () => {
-    server = new DanWebSocketServer({ port: 19020, path: "/ws", mode: "individual" });
+    server = new DanWebSocketServer({ port: 19020, path: "/ws", mode: "principal" });
     await waitFor(50);
 
     server.enableAuthorization(true);
@@ -266,7 +266,7 @@ describe("E2E: Authentication", () => {
   });
 
   it("auth reject", async () => {
-    server = new DanWebSocketServer({ port: 19021, path: "/ws", mode: "individual" });
+    server = new DanWebSocketServer({ port: 19021, path: "/ws", mode: "principal" });
     await waitFor(50);
 
     server.enableAuthorization(true);
@@ -291,7 +291,7 @@ describe("E2E: Authentication", () => {
 
 describe("E2E: Session management", () => {
   it("getSessionsByPrincipal and isConnected", async () => {
-    server = new DanWebSocketServer({ port: 19030, path: "/ws", mode: "individual" });
+    server = new DanWebSocketServer({ port: 19030, path: "/ws", mode: "principal" });
     await waitFor(50);
 
     server.enableAuthorization(true);

@@ -11,7 +11,6 @@ import { BulkQueue } from "../connection/bulk-queue.js";
 import { HeartbeatManager } from "../connection/heartbeat-manager.js";
 import { ReconnectEngine, type ReconnectOptions, DEFAULT_RECONNECT_OPTIONS } from "../connection/reconnect-engine.js";
 import { TopicClientHandle } from "./topic-client-handle.js";
-import type { TopicClientPayloadView } from "./topic-client-handle.js";
 import { createStateProxy } from "./state-proxy.js";
 
 export type ClientState =
@@ -77,7 +76,7 @@ export class DanWebSocketClient {
   private _topicKeyCache = new Map<number, { topicIdx: number; userKey: string } | null>();
 
   // Connection layers
-  private _bulkQueue = new BulkQueue();
+  private _bulkQueue = new BulkQueue(undefined, { emitFlushEnd: false });
   private _heartbeat = new HeartbeatManager();
   private _reconnectEngine: ReconnectEngine;
   private _parser = createStreamParser();
@@ -123,12 +122,18 @@ export class DanWebSocketClient {
     return this._registry.paths;
   }
 
-  /** Get a Proxy-based state view for nested object access. */
+  /** Get a Proxy-based state view for nested object access.
+   *  Cached per-instance — the Proxy closes over stable `this.get` / `this.keys`
+   *  references, so one Proxy can serve every `.data` access. */
+  private _dataProxy: Record<string, any> | null = null;
   get data(): Record<string, any> {
-    return createStateProxy(
-      (key) => this.get(key),
-      () => this.keys,
-    );
+    if (this._dataProxy === null) {
+      this._dataProxy = createStateProxy(
+        (key) => this.get(key),
+        () => this.keys,
+      );
+    }
+    return this._dataProxy;
   }
 
   connect(): void {
@@ -695,13 +700,13 @@ export class DanWebSocketClient {
     }
   }
 
-  private _getWebSocketImpl(): any {
+  private _getWebSocketImpl(): { new (url: string): WebSocket } {
     if (typeof globalThis.WebSocket !== "undefined") return globalThis.WebSocket;
     // Node.js — lazy import to avoid browser bundlers pulling in ws
     try {
-      const g = globalThis as Record<string, any>;
-      const _require = g["require"] as ((id: string) => any) | undefined;
-      if (_require) return _require("ws");
+      const g = globalThis as Record<string, unknown>;
+      const _require = g["require"] as ((id: string) => unknown) | undefined;
+      if (_require) return _require("ws") as { new (url: string): WebSocket };
     } catch {}
     throw new DanWSError("NO_WEBSOCKET", "No WebSocket implementation found. Install 'ws' for Node.js.");
   }

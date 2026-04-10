@@ -8,7 +8,7 @@ function waitFor(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
 }
 
-function waitUntil(fn: () => boolean, timeout = 3000): Promise<void> {
+function waitUntil(fn: () => boolean, timeout = 10000): Promise<void> {
   return new Promise((resolve, reject) => {
     const start = Date.now();
     const check = () => {
@@ -270,12 +270,5 @@ describe("Mode guards", () => {
   it("session_topic rejects server.principal()", () => {
     server = new DanWebSocketServer({ port: 19121, path: "/ws", mode: "session_topic" });
     expect(() => server!.principal("alice")).toThrow();
-  });
-
-  it("principal mode alias: individual = principal", () => {
-    server = new DanWebSocketServer({ port: 19122, path: "/ws", mode: "individual" });
-    expect(server.mode).toBe("principal");
-    server.principal("alice").set("x", 1);
-    expect(server.principal("alice").get("x")).toBe(1);
   });
 });

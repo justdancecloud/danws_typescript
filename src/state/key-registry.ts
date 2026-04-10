@@ -56,6 +56,9 @@ export class KeyRegistry {
     // Clear existing and re-register
     this.clear();
     for (const key of keys) {
+      if (this.nextId > 0xffffffff) {
+        throw new DanWSError("KEY_ID_OVERFLOW", "Exhausted 32-bit keyId space (0xFFFFFFFF)");
+      }
       const entry: KeyEntry = { path: key.path, type: key.type, keyId: this.nextId };
       this.byId.set(this.nextId, entry);
       this.byPath.set(key.path, entry);

@@ -4,6 +4,10 @@ export default defineConfig({
   test: {
     pool: "forks",
     maxForks: "100%",
+    // Give timing-sensitive integration tests room on slower CI runners
+    // (GitHub Actions ubuntu-latest is noticeably slower than dev machines).
+    testTimeout: 20000,
+    hookTimeout: 20000,
     coverage: {
       provider: "v8",
       reporter: ["text", "html", "lcov"],

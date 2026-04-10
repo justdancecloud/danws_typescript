@@ -10,9 +10,14 @@ export class BulkQueue {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private _onFlush: ((data: Uint8Array) => void) | null = null;
   private _flushInterval: number;
+  private _emitFlushEnd: boolean;
 
-  constructor(flushIntervalMs?: number) {
+  constructor(flushIntervalMs?: number, options?: { emitFlushEnd?: boolean }) {
     this._flushInterval = flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL;
+    // ServerFlushEnd is a server→client signal. Only the server-side BulkQueue
+    // should append it — clients call BulkQueue too (for ClientReady /
+    // ClientKeyRequest batching) but must not emit this frame.
+    this._emitFlushEnd = options?.emitFlushEnd ?? true;
   }
 
   onFlush(callback: (data: Uint8Array) => void): void {
@@ -47,11 +52,13 @@ export class BulkQueue {
 
     if (frames.length === 0) return;
 
-    // Append SERVER_FLUSH_END as batch boundary signal
-    frames.push({
-      frameType: FrameType.ServerFlushEnd,
-      keyId: 0, dataType: DataType.Null, payload: null,
-    });
+    // Append SERVER_FLUSH_END as batch boundary signal (server direction only)
+    if (this._emitFlushEnd) {
+      frames.push({
+        frameType: FrameType.ServerFlushEnd,
+        keyId: 0, dataType: DataType.Null, payload: null,
+      });
+    }
 
     if (this._onFlush) {
       const data = encodeBatch(frames);

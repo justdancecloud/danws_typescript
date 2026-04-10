@@ -45,7 +45,7 @@ export function createStateProxy(
   return new Proxy({} as any, {
     get(_target, prop, _receiver) {
       if (typeof prop === "symbol") {
-        if (prop === Symbol.iterator) return buildIterator(getter, keysFn, prefix, resolveItem);
+        if (prop === Symbol.iterator) return buildIterator(getter, prefix, resolveItem);
         return undefined;
       }
 
@@ -63,7 +63,7 @@ export function createStateProxy(
 
       if (prop === "forEach" || prop === "map" || prop === "filter" ||
           prop === "find" || prop === "some" || prop === "every" || prop === "reduce") {
-        return buildArrayMethod(prop as string, getter, keysFn, prefix, resolveItem);
+        return buildArrayMethod(prop as string, getter, prefix, resolveItem);
       }
 
       // Leaf value
@@ -115,7 +115,6 @@ export function createStateProxy(
 
 function buildIterator(
   getter: (key: string) => unknown,
-  keysFn: () => string[],
   prefix: string,
   resolveItem: (path: string) => unknown,
 ): () => Iterator<any> {
@@ -131,7 +130,6 @@ function buildIterator(
 function buildArrayMethod(
   method: string,
   getter: (key: string) => unknown,
-  keysFn: () => string[],
   prefix: string,
   resolveItem: (path: string) => unknown,
 ): (...args: any[]) => any {
