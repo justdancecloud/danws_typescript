@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.4.5] - 2026-04-11
+### Changed
+- **`Frame.payload` is now `any`** (was `unknown`) to match Java's `Object payload`. All `frame.payload as string` / `as number` casts removed from `client.ts`, `server.ts`, and `codec.ts`. Payload shape is still routed via `switch (frame.frameType)`, but there's no more TypeScript ceremony for each access.
+- **CI workflow scope tightened**: no automatic builds on `push` — PRs + manual dispatch only.
+- **Release workflow skips tests** — tag-push pipeline goes straight to build + `npm publish` + GitHub Packages + GitHub Release (under 2 minutes end-to-end).
+
 ## [2.4.4] - 2026-04-11
 ### Removed
 - **`"individual"` ServerMode** — deleted. It was silently aliased to `"principal"` at construction time; the type union entry was misleading. Use `"principal"` directly.
