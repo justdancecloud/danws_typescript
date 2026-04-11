@@ -405,7 +405,7 @@ export class DanWebSocketServer {
       if (frame.frameType === FrameType.Auth) {
         const internal = this._tmpSessions.get(clientUuid);
         if (internal && this._authEnabled) {
-          const token = frame.payload as string;
+          const token = frame.payload;
           internal.authController.handleAuth(token);
           for (const cb of this._onAuthorize) { try { cb(clientUuid, token); } catch (e) { this._log("onAuthorize callback error", toError(e)); } }
         }
@@ -537,7 +537,7 @@ export class DanWebSocketServer {
 
       case FrameType.ClientKeyRegistration: {
         if (!internal.clientRegistry) internal.clientRegistry = new KeyRegistry();
-        internal.clientRegistry.registerOne(frame.keyId, frame.payload as string, frame.dataType);
+        internal.clientRegistry.registerOne(frame.keyId, frame.payload, frame.dataType);
         break;
       }
 

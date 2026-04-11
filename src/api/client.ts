@@ -330,7 +330,7 @@ export class DanWebSocketClient {
         if (this._state === "identifying") {
           this._state = "synchronizing";
         }
-        const keyPath = frame.payload as string;
+        const keyPath = frame.payload;
         this._registry.registerOne(frame.keyId, keyPath, frame.dataType);
         // Apply any pending value that arrived before this key was registered
         const pending = this._pendingValues.get(frame.keyId);
@@ -458,7 +458,7 @@ export class DanWebSocketClient {
             prefix = lengthPath.slice(0, lengthPath.length - ".length".length);
           }
 
-          const rawShift = frame.payload as number;
+          const rawShift = frame.payload;
           const currentLenObj = this._store.get(frame.keyId);
           const currentLength = typeof currentLenObj === "number" ? currentLenObj : 0;
           // Clamp: negative or oversized shift counts from a malformed/hostile
@@ -515,7 +515,7 @@ export class DanWebSocketClient {
             prefix = lengthPath.slice(0, lengthPath.length - ".length".length);
           }
 
-          const rawShift = frame.payload as number;
+          const rawShift = frame.payload;
           const currentLenObj = this._store.get(frame.keyId);
           const currentLength = typeof currentLenObj === "number" ? currentLenObj : 0;
           // Clamp: negative or oversized shift counts from a malformed/hostile server.

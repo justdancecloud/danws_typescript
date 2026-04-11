@@ -52,7 +52,11 @@ export interface Frame {
   frameType: FrameType;
   keyId: number;
   dataType: DataType;
-  payload: unknown;
+  /** Matches Java's `Object payload()`. The concrete shape is determined
+   *  at runtime by `frameType` + `dataType` — users handle it via switch
+   *  on `frameType`. `any` keeps cross-language parity with Java and
+   *  removes noise from dozens of `as string` / `as number` casts. */
+  payload: any;
 }
 
 export class DanWSError extends globalThis.Error {

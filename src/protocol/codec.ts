@@ -14,7 +14,7 @@ export function encode(frame: Frame): Uint8Array {
 
   if (isKeyRegistrationFrame(frame.frameType)) {
     // Key registration: payload is UTF-8 keyPath string
-    rawPayload = _textEncoder.encode(frame.payload as string);
+    rawPayload = _textEncoder.encode(frame.payload);
   } else if (isSignalFrame(frame.frameType)) {
     // Signal frames: no payload
     rawPayload = new Uint8Array(0);
