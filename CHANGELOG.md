@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.4.9] - 2026-04-16
+### Added
+- **`setMaxConnections(max)` / `maxConnections` option** — caps concurrent connections. 0 = unlimited (default).
+- **`setMaxFramesPerSec(max)` / `maxFramesPerSec` option** — per-client frame rate limit. 0 = unlimited (default).
+- **`metrics()`** — returns `{ activeSessions, pendingSessions, principalCount, framesIn, framesOut }`. Parity with Java 2.4.9.
+
 ## [2.4.8] - 2026-04-16
 ### Fixed
 - **KeyRegistry unbounded growth (DoS).** Default limit of 10,000 keys per registry; throws `KEY_LIMIT_EXCEEDED` when exceeded.

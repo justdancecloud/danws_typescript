@@ -29,6 +29,10 @@ export interface ServerOptions {
   maxMessageSize?: number;
   /** Max single serialized value size in bytes (default: 64KB). Throws on set() if exceeded. */
   maxValueSize?: number;
+  /** Max concurrent connections (0 = unlimited, default: 0). */
+  maxConnections?: number;
+  /** Max frames per second per client (0 = unlimited, default: 0). Exceeding closes the connection. */
+  maxFramesPerSec?: number;
 }
 
 interface InternalSession {
@@ -91,6 +95,13 @@ export class DanWebSocketServer {
   private _onTopicUnsubscribe: Array<(session: DanWebSocketSession, topicName: string) => void> = [];
   private _onTopicParamsChange: Array<(session: DanWebSocketSession, topic: TopicInfo) => void> = [];
 
+  // ── Rate limits & metrics ──
+  private _maxConnections = 0;
+  private _maxFramesPerSec = 0;
+  private _framesIn = 0;
+  private _framesOut = 0;
+  private _frameCounters = new Map<string, { count: number; windowStart: number }>();
+
   constructor(options: ServerOptions) {
     if (options.port != null && options.server != null) {
       throw new DanWSError("INVALID_OPTIONS", "Cannot specify both port and server");
@@ -107,6 +118,8 @@ export class DanWebSocketServer {
     this._flushIntervalMs = options.flushIntervalMs;
     this._maxValueSize = options.maxValueSize ?? 65_536;
     this._principalEvictionTtl = options.principalEvictionTtl ?? 300_000;
+    this._maxConnections = options.maxConnections ?? 0;
+    this._maxFramesPerSec = options.maxFramesPerSec ?? 0;
 
     // Topic namespace
     const ns: TopicNamespaceInternal = {
@@ -180,6 +193,19 @@ export class DanWebSocketServer {
   }
 
   // ──── Common API ────
+
+  setMaxConnections(max: number): void { this._maxConnections = max; }
+  setMaxFramesPerSec(max: number): void { this._maxFramesPerSec = max; }
+
+  metrics(): { activeSessions: number; pendingSessions: number; principalCount: number; framesIn: number; framesOut: number } {
+    return {
+      activeSessions: this._sessions.size,
+      pendingSessions: this._tmpSessions.size,
+      principalCount: this._principals.size,
+      framesIn: this._framesIn,
+      framesOut: this._framesOut,
+    };
+  }
 
   enableAuthorization(enabled: boolean, options?: { timeout?: number }): void {
     this._authEnabled = enabled;
@@ -381,6 +407,18 @@ export class DanWebSocketServer {
     });
 
     parser.onFrame((frame) => {
+      this._framesIn++;
+      if (this._maxFramesPerSec > 0 && clientUuid) {
+        let rc = this._frameCounters.get(clientUuid);
+        const now = Date.now();
+        if (!rc) { rc = { count: 0, windowStart: now }; this._frameCounters.set(clientUuid, rc); }
+        if (now - rc.windowStart >= 1000) { rc.count = 0; rc.windowStart = now; }
+        if (++rc.count > this._maxFramesPerSec) {
+          this._log(`Frame rate exceeded (${this._maxFramesPerSec}/s) — closing ${clientUuid}`);
+          ws.close();
+          return;
+        }
+      }
       if (!identified) {
         if (frame.frameType !== FrameType.Identify) { ws.close(); return; }
         const payload = frame.payload;
@@ -446,6 +484,13 @@ export class DanWebSocketServer {
   }
 
   private _handleIdentified(ws: WS, clientUuid: string): void {
+    const total = this._sessions.size + this._tmpSessions.size;
+    if (this._maxConnections > 0 && !this._sessions.has(clientUuid) && total >= this._maxConnections) {
+      this._log(`Max connections reached (${this._maxConnections}) — rejecting ${clientUuid}`);
+      ws.close();
+      return;
+    }
+
     const existing = this._sessions.get(clientUuid);
     if (existing) {
       if (existing.ws && existing.ws.readyState === WS.OPEN) existing.ws.close();
@@ -653,6 +698,7 @@ export class DanWebSocketServer {
   // ──── Internal: Session disconnect ────
 
   private _handleSessionDisconnect(uuid: string): void {
+    this._frameCounters.delete(uuid);
     const internal = this._sessions.get(uuid);
     if (!internal) {
       const tmp = this._tmpSessions.get(uuid);
@@ -706,7 +752,7 @@ export class DanWebSocketServer {
   }
 
   private _sendFrame(internal: InternalSession, frame: Frame): void {
-    if (internal.ws && internal.ws.readyState === WS.OPEN) internal.ws.send(encode(frame));
+    if (internal.ws && internal.ws.readyState === WS.OPEN) { this._framesOut++; internal.ws.send(encode(frame)); }
   }
 }
 

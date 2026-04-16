@@ -120,6 +120,8 @@ export class PrincipalManager {
     this._maxValueSize = size;
   }
 
+  get size(): number { return this._principals.size; }
+
   principal(name: string): PrincipalTX {
     let ptx = this._principals.get(name);
     if (!ptx) {
