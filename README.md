@@ -14,7 +14,25 @@
 npm install dan-websocket
 ```
 
-Also available in **Java**: [dan-websocket for Java](https://github.com/justdancecloud/danws_java)
+Available in **8 languages**: [Java](https://github.com/justdancecloud/danws_java) · [TypeScript](https://github.com/justdancecloud/danws_typescript) · [C#](https://github.com/justdancecloud/danws_csharp) · [Dart](https://github.com/justdancecloud/danws_dart) · [Python](https://github.com/justdancecloud/danws_python) · [Go](https://github.com/justdancecloud/danws_go) · [Swift](https://github.com/justdancecloud/danws_swift) · [C++](https://github.com/justdancecloud/danws_cpp)
+
+---
+
+## Why WebSocket?
+
+TCP, UDP, HTTP polling, SSE, gRPC streaming — real-time 통신 선택지는 많습니다. 그 중에서 **WebSocket을 써야 하는 이유**:
+
+| | WebSocket | HTTP Polling | SSE | Raw TCP/UDP | gRPC Stream |
+|---|---|---|---|---|---|
+| Bidirectional | ✅ | ❌ | ❌ (server→client) | ✅ | ✅ |
+| Browser support | ✅ native | ✅ | ✅ | ❌ | ❌ (grpc-web) |
+| CDN compatible | ✅ Cloudflare, AWS ALB | ✅ | ✅ | ❌ blocked | △ |
+| DDoS protection | ✅ **CF/AWS WAF works** | ✅ | ✅ | ❌ build yourself | △ |
+| Mobile/Unity | ✅ all platforms | ✅ | △ | ✅ | △ |
+| Latency | **~1ms** (persistent) | 100ms+ (per request) | ~1ms | ~1ms | ~1ms |
+| Firewall friendly | ✅ **port 443, HTTPS upgrade** | ✅ | ✅ | ❌ custom ports | △ |
+
+WebSocket is the only protocol that is **bidirectional + low-latency + CDN-compatible + works in every browser**. It's the de facto transport layer for games, dashboards, and collaboration tools.
 
 ---
 
@@ -57,7 +75,39 @@ You write plain objects. dan-websocket auto-flattens them into binary leaf keys,
 | VarNumber compression | Yes (50-75% smaller) | No | No | No |
 | Multi-device sync | Principal-based | DIY | Path-level | DIY |
 | Bundle size | ~8 KB | ~10 KB | ~90+ KB | ~50+ KB |
-| Cross-language | TypeScript + Java | Many | Many | Many |
+| Cross-language | **8 languages** | Many | Many | Many |
+
+### CDN + DDoS Protection = Production Security
+
+dan-websocket uses standard `wss://` WebSocket. This means you can put it behind **Cloudflare, AWS CloudFront, or Azure Front Door** with zero changes:
+
+```
+[Client]  →  wss://  →  [Cloudflare CDN / WAF / DDoS Shield]
+                                      ↓
+                           [Origin: dan-websocket Server]
+```
+
+- **Free DDoS protection** — Cloudflare Free plan absorbs L3/L4/L7 attacks. `setMaxConnections()` / `setMaxFramesPerSec()` are origin-level safeguards
+- **Binary = hard to sniff** — JSON is readable in Wireshark; DanProtocol is custom binary, raising reverse-engineering cost
+- **Global latency reduction** — CDN Anycast routes to nearest PoP
+- **No custom infra** — one server + Cloudflare = global game service
+
+TCP/UDP game servers (Photon, Mirror) **cannot** sit behind a CDN. They use custom ports, get blocked by firewalls, and require dedicated DDoS infrastructure. **WebSocket + CDN solves infra cost and security simultaneously.**
+
+### 8 Languages, One Protocol
+
+```
+Server (any language)          Client (any platform)
+─────────────────────          ─────────────────────
+Java (Netty)             ←→    Unity (C#)
+TypeScript (ws)          ←→    Flutter (Dart)
+Python (websockets)      ←→    iOS (Swift)
+Go (gorilla)             ←→    Unreal Engine (C++)
+                         ←→    Browser (TypeScript)
+                         ←→    Backend scripts (Python/Go)
+```
+
+All combinations communicate over the **same DanProtocol v3.5 wire format**. Build a Java server, connect Unity + Flutter + Web clients — no protocol translation needed.
 
 ---
 
