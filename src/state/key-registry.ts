@@ -36,11 +36,25 @@ export function validateKeyPath(path: string): void {
   _validatedPaths.add(path);
 }
 
+export const DEFAULT_MAX_KEYS = 10_000;
+
 export class KeyRegistry {
   private byId = new Map<number, KeyEntry>();
   private byPath = new Map<string, KeyEntry>();
   private nextId = 1;
   private _cachedPaths: string[] | null = null;
+  private _maxKeys: number;
+
+  constructor(maxKeys: number = DEFAULT_MAX_KEYS) {
+    this._maxKeys = maxKeys;
+  }
+
+  private enforceLimit(): void {
+    if (this.byId.size >= this._maxKeys) {
+      throw new DanWSError("KEY_LIMIT_EXCEEDED",
+        `Key registry limit reached (${this._maxKeys}). Too many unique keys.`);
+    }
+  }
 
   register(keys: KeyDefinition[]): void {
     // Check for duplicates within the input
@@ -72,6 +86,7 @@ export class KeyRegistry {
    */
   registerOne(keyId: number, path: string, type: DataType): void {
     validateKeyPath(path);
+    if (!this.byPath.has(path)) this.enforceLimit();
     const entry: KeyEntry = { path, type, keyId };
     this.byId.set(keyId, entry);
     this.byPath.set(path, entry);

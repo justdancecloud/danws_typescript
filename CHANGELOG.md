@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.4.8] - 2026-04-16
+### Fixed
+- **KeyRegistry unbounded growth (DoS).** Default limit of 10,000 keys per registry; throws `KEY_LIMIT_EXCEEDED` when exceeded.
+- **BulkQueue unbounded growth (Slow Consumer DoS).** 50,000-frame limit; on overflow disposes queue and closes the slow consumer's socket.
+- **Topic name injection.** Validated against `[a-zA-Z0-9_.-]{1,128}`, reserved names blocked, max 100 topics per session. Parity with Java 2.4.8.
+
 ## [2.4.6] - 2026-04-16
 ### Fixed
 - **`authorize()` now validates non-null principal.** Calling `server.authorize(uuid, token, null)` — a mis-pattern used to try to reject a bad token — previously inserted a `null` key into the principal store, polluting state. `authorize()` now throws `DanWSError("INVALID_PRINCIPAL")` with a clear message pointing at the correct API: `server.reject(clientUuid, reason)`. Parity with Java 2.4.6.

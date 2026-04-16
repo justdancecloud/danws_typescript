@@ -3,22 +3,26 @@ import type { Frame } from "../protocol/types.js";
 import { encodeBatch } from "../protocol/codec.js";
 
 const DEFAULT_FLUSH_INTERVAL = 100; // ms
+export const DEFAULT_MAX_QUEUE_SIZE = 50_000;
 
 export class BulkQueue {
   private queue: Frame[] = [];
   private valueFrames = new Map<number, Frame>(); // keyId → latest value frame (dedup)
   private timer: ReturnType<typeof setTimeout> | null = null;
   private _onFlush: ((data: Uint8Array) => void) | null = null;
+  private _onOverflow: (() => void) | null = null;
   private _flushInterval: number;
   private _emitFlushEnd: boolean;
+  private _maxQueueSize: number;
+  private _disposed = false;
 
-  constructor(flushIntervalMs?: number, options?: { emitFlushEnd?: boolean }) {
+  constructor(flushIntervalMs?: number, options?: { emitFlushEnd?: boolean; maxQueueSize?: number }) {
     this._flushInterval = flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL;
-    // ServerFlushEnd is a server→client signal. Only the server-side BulkQueue
-    // should append it — clients call BulkQueue too (for ClientReady /
-    // ClientKeyRequest batching) but must not emit this frame.
     this._emitFlushEnd = options?.emitFlushEnd ?? true;
+    this._maxQueueSize = options?.maxQueueSize ?? DEFAULT_MAX_QUEUE_SIZE;
   }
+
+  onOverflow(cb: () => void): void { this._onOverflow = cb; }
 
   onFlush(callback: (data: Uint8Array) => void): void {
     this._onFlush = callback;
@@ -29,8 +33,15 @@ export class BulkQueue {
    * Value frames are deduplicated per keyId — only the latest value is kept.
    */
   enqueue(frame: Frame): void {
+    if (this._disposed) return;
+    const totalPending = this.queue.length + this.valueFrames.size;
+    if (totalPending >= this._maxQueueSize) {
+      this.dispose();
+      if (this._onOverflow) { try { this._onOverflow(); } catch {} }
+      return;
+    }
+
     if (isValueFrame(frame.frameType)) {
-      // Dedup: replace previous value for same keyId
       this.valueFrames.set(frame.keyId, frame);
     } else {
       this.queue.push(frame);

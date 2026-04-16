@@ -488,6 +488,7 @@ export class DanWebSocketServer {
 
     session._setEnqueue((f) => bulkQueue.enqueue(f));
     bulkQueue.onFlush((data) => { if (internal.ws && internal.ws.readyState === WS.OPEN) internal.ws.send(data); });
+    bulkQueue.onOverflow(() => { if (internal.ws) { try { internal.ws.close(); } catch {} } });
     heartbeat.onSend((data) => { if (internal.ws && internal.ws.readyState === WS.OPEN) internal.ws.send(data); });
     heartbeat.onTimeout(() => { this._handleSessionDisconnect(clientUuid); });
     heartbeat.start();
@@ -558,11 +559,14 @@ export class DanWebSocketServer {
     }
   }
 
+  private static readonly _TOPIC_NAME_VALID = /^[a-zA-Z0-9_.\-]{1,128}$/;
+  private static readonly _MAX_TOPICS_PER_SESSION = 100;
+
   private _processTopicSync(internal: InternalSession): void {
     const session = internal.session;
 
     const newTopics = new Map<string, Record<string, unknown>>();
-    const nameToIndex = new Map<string, number>(); // topicName → client wire index
+    const nameToIndex = new Map<string, number>();
 
     if (internal.clientRegistry && internal.clientValues) {
       const indexToName = new Map<string, string>();
@@ -575,7 +579,10 @@ export class DanWebSocketServer {
         if (path.endsWith(".name") && path.startsWith("topic.")) {
           const idxStr = path.slice(6, path.length - 5); // "topic.<idx>.name" → idx
           const topicName = internal.clientValues.get(entry.keyId) as string;
-          if (topicName) {
+          if (topicName
+              && DanWebSocketServer._TOPIC_NAME_VALID.test(topicName)
+              && topicName !== BROADCAST_PRINCIPAL
+              && newTopics.size < DanWebSocketServer._MAX_TOPICS_PER_SESSION) {
             indexToName.set(idxStr, topicName);
             nameToIndex.set(topicName, parseInt(idxStr));
             if (!newTopics.has(topicName)) newTopics.set(topicName, {});
