@@ -234,6 +234,13 @@ describe("E2E: Individual Mode", () => {
     server = new DanWebSocketServer({ port: 19013, path: "/ws", mode: "principal" });
     expect(() => server!.set("key", "val")).toThrow();
   });
+
+  it("authorize() throws INVALID_PRINCIPAL when principal is null", () => {
+    server = new DanWebSocketServer({ port: 19014, path: "/ws", mode: "principal" });
+    server.enableAuthorization(true);
+    expect(() => server!.authorize("any-uuid", "any-token", null as unknown as string))
+      .toThrow(/reject/i);
+  });
 });
 
 // ────────────────────────────────────────────────

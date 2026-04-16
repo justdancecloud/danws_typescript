@@ -191,6 +191,10 @@ export class DanWebSocketServer {
    *  calling `authorize()`. Kept in the signature so the token is easily
    *  available for logging/tracing hooks and for future validation logic. */
   authorize(clientUuid: string, _token: string, principal: string): void {
+    if (principal == null) {
+      throw new DanWSError("INVALID_PRINCIPAL",
+        "authorize(): principal must not be null. To deny a token, call reject(clientUuid, reason) instead.");
+    }
     const internal = this._tmpSessions.get(clientUuid);
     if (!internal) return;
 

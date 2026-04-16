@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.4.6] - 2026-04-16
+### Fixed
+- **`authorize()` now validates non-null principal.** Calling `server.authorize(uuid, token, null)` — a mis-pattern used to try to reject a bad token — previously inserted a `null` key into the principal store, polluting state. `authorize()` now throws `DanWSError("INVALID_PRINCIPAL")` with a clear message pointing at the correct API: `server.reject(clientUuid, reason)`. Parity with Java 2.4.6.
+
 ## [2.4.5] - 2026-04-11
 ### Changed
 - **`Frame.payload` is now `any`** (was `unknown`) to match Java's `Object payload`. All `frame.payload as string` / `as number` casts removed from `client.ts`, `server.ts`, and `codec.ts`. Payload shape is still routed via `switch (frame.frameType)`, but there's no more TypeScript ceremony for each access.
